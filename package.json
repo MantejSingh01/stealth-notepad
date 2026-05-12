@@ -1,0 +1,106 @@
+{
+  "name": "stealth-notepad",
+  "version": "1.0.0",
+  "description": "A stealth mode notepad that's invisible during screen sharing",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server.js",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win",
+    "rebuild": "npx @electron/rebuild -f -w nodejs-whisper"
+  },
+  "keywords": [
+    "electron",
+    "notepad",
+    "stealth",
+    "privacy"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^41.0.0",
+    "electron-builder": "^26.8.1",
+    "@electron/rebuild": "^4.0.4"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "nodejs-whisper": "^0.1.16",
+    "openai": "^4.104.0",
+    "socket.io": "^4.8.3",
+    "socket.io-client": "^4.8.3"
+  },
+  "build": {
+    "appId": "com.stealth.notepad",
+    "productName": "Stealth Notepad",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "renderer.js",
+      "index.html",
+      "server.js",
+      "native-helper.js",
+      "node_modules/**/*",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/*.map",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/__tests__/**",
+      "!node_modules/**/spec/**",
+      "!node_modules/**/docs/**",
+      "!node_modules/**/*.md",
+      "!node_modules/**/*.txt",
+      "!node_modules/**/README*",
+      "!node_modules/**/CHANGELOG*",
+      "!node_modules/**/LICENSE*",
+      "!node_modules/**/LICENCE*",
+      "!node_modules/**/.npmignore",
+      "!node_modules/**/Makefile",
+      "!node_modules/electron/**/*",
+      "!node_modules/electron-builder/**/*",
+      "!node_modules/@anthropic-ai/**/*",
+      "!node_modules/typescript/**/*",
+      "!node_modules/@types/**/*",
+      "!node_modules/app-builder-bin/**/*",
+      "!node_modules/app-builder-lib/**/*",
+      "!node_modules/7zip-bin/**/*",
+      "!companion.html",
+      "!companion.js",
+      "!agent.js",
+      "!.env",
+      "!**/*.test.js",
+      "!node_modules/.cache"
+    ],
+    "asar": true,
+    "compression": "maximum",
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}

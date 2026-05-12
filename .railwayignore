@@ -1,0 +1,10 @@
+node_modules
+dist
+.claude
+agent.js
+native-helper.js
+entitlements.mac.plist
+FEATURE_PLAN.md
+*.icns
+*.ico
+*.png

@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Stealth Notepad</title>
+  <style>
+    /* Dark glass aesthetic */
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background:transparent; overflow:hidden; -webkit-app-region:no-drag; }
+
+    /* ===== BAR MODE (default) ===== */
+    #bar-mode {
+      display: flex;
+      width: 100%; height: 52px;
+      background: rgba(0,0,0,0.88);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      align-items: center;
+      padding: 0 14px;
+      gap: 10px;
+      -webkit-app-region: no-drag;
+    }
+    #bar-mode .bar-icon { font-size:14px; flex-shrink:0; }
+    #bar-timer { font-size:10px; color:rgba(255,255,255,0.35); font-family:monospace; flex-shrink:0; }
+    #bar-preview { flex:1; font-size:10px; color:rgba(251,191,36,0.7); overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }
+    #bar-rec-dot { width:6px; height:6px; border-radius:50%; background:#ef4444; flex-shrink:0; display:none; animation:pulse 1.5s infinite; }
+    #bar-expand-btn { font-size:11px; color:#e5e5e5; background:#2a2a2a; border:1px solid #444; border-radius:4px; padding:3px 8px; cursor:pointer; flex-shrink:0; font-family:inherit; -webkit-app-region:no-drag; transition:opacity 0.2s; }
+    #bar-expand-btn:hover { opacity:0.75; }
+
+    /* ===== PANEL MODE ===== */
+    #panel-mode {
+      display: none;
+      width: 100vw;
+      height: 100vh;
+      background: rgba(0,0,0,0.88);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      flex-direction: row;
+      overflow: hidden;
+    }
+
+    /* Main AI panel */
+    #ai-panel {
+      width: 440px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+    }
+
+    /* Panel header */
+    .panel-header {
+      height: 38px;
+      background: rgba(255,255,255,0.04);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      gap: 8px;
+      flex-shrink: 0;
+      -webkit-app-region: no-drag;
+    }
+    .panel-header-title { font-size:12px; color:rgba(255,255,255,0.5); font-weight:500; }
+    #session-badge { font-size:9px; color:rgba(251,191,36,0.8); background:rgba(251,191,36,0.1); border:1px solid rgba(251,191,36,0.2); border-radius:3px; padding:1px 6px; display:none; }
+    #session-timer { font-size:10px; color:rgba(255,255,255,0.3); font-family:monospace; }
+    .header-spacer { flex:1; }
+    .panel-header-btn { font-size:10px; color:rgba(255,255,255,0.35); background:transparent; border:none; cursor:pointer; font-family:inherit; padding:2px 6px; border-radius:3px; -webkit-app-region:no-drag; transition:opacity 0.2s; }
+    .panel-header-btn:hover { opacity:0.75; color:rgba(255,255,255,0.7); }
+    #collapse-to-bar-btn { font-size:14px; }
+
+    /* AI feed */
+    #ai-feed-section {
+      flex: 3;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
+    }
+    .section-header {
+      display:flex; align-items:center; gap:6px;
+      padding: 5px 12px;
+      font-size:10px; color:rgba(255,255,255,0.3);
+      background:rgba(255,255,255,0.02);
+      border-bottom:1px solid rgba(255,255,255,0.05);
+      flex-shrink:0;
+      -webkit-app-region: no-drag;
+    }
+    .section-header span { flex:1; }
+    #ai-feed {
+      flex:1; overflow-y:auto; padding:8px 12px;
+      display:flex; flex-direction:column; gap:6px;
+      -webkit-app-region:no-drag;
+    }
+    #ai-feed::-webkit-scrollbar { width:3px; }
+    #ai-feed::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
+    .ai-entry { font-size:11px; line-height:1.6; display:flex; gap:6px; }
+    .ai-entry .ts-time { font-size:9px; color:rgba(255,255,255,0.2); flex-shrink:0; padding-top:2px; }
+    .ai-entry .ai-text { color:rgba(251,191,36,0.9); white-space:pre-wrap; }
+    .ai-entry .ai-text strong { color:rgba(255,255,255,0.85); }
+    .ai-entry .ai-text p { margin-top:4px; }
+    .ai-entry .ai-text p:first-child { margin-top:0; }
+    .ai-entry .ai-text ul, .ai-entry .ai-text ol { padding-left:14px; }
+    .ai-entry.error .ai-text { color:rgba(239,68,68,0.8); }
+    .ai-thinking { display:inline-block; animation:ai-blink 1s steps(3,end) infinite; letter-spacing:2px; color:rgba(251,191,36,0.5); }
+    @keyframes ai-blink { 0%,100%{opacity:1} 33%{opacity:0.3} 66%{opacity:0.6} }
+
+    /* AI action row */
+    #ai-actions {
+      display:flex; gap:4px; padding:6px 10px;
+      flex-shrink:0; -webkit-app-region:no-drag;
+      border-bottom:1px solid rgba(255,255,255,0.05);
+      flex-wrap:wrap;
+    }
+    .ai-btn {
+      flex:1; padding:4px 6px; font-size:9px;
+      border-radius:4px; cursor:pointer; border:1px solid;
+      background:transparent; font-family:inherit; transition:opacity 0.2s;
+      white-space:nowrap;
+    }
+    .ai-btn:hover { opacity:0.75; }
+    .ai-btn:disabled { opacity:0.3; cursor:not-allowed; }
+
+    /* Transcript section */
+    #transcript-section {
+      flex: 1.5;
+      display:flex; flex-direction:column; min-height:0;
+      border-bottom:1px solid rgba(255,255,255,0.07);
+    }
+    #transcript-feed {
+      flex:1; overflow-y:auto; padding:6px 12px;
+      display:flex; flex-direction:column; gap:2px;
+      -webkit-app-region:no-drag;
+    }
+    #transcript-feed::-webkit-scrollbar { width:3px; }
+    #transcript-feed::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.1); border-radius:2px; }
+    .transcript-entry { display:flex; gap:5px; font-size:10px; line-height:1.5; }
+    .ts-time { font-size:9px; color:rgba(255,255,255,0.2); flex-shrink:0; padding-top:1px; }
+    .ts-text { color:rgba(255,255,255,0.6); }
+    .transcript-entry.local .ts-text { color:rgba(167,139,250,0.85); }
+    .transcript-entry.remote .ts-text { color:rgba(96,165,250,0.85); }
+
+    /* Audio device row */
+    #audio-device-row {
+      display:flex; align-items:center; gap:6px; padding:4px 10px;
+      flex-shrink:0; -webkit-app-region:no-drag;
+      border-bottom:1px solid rgba(255,255,255,0.04);
+    }
+    #audio-device-row label { font-size:9px; color:rgba(255,255,255,0.25); flex-shrink:0; }
+    #audio-device-select {
+      flex:1; font-size:9px; background:rgba(255,255,255,0.07);
+      color:rgba(255,255,255,0.55); border:1px solid rgba(255,255,255,0.1);
+      border-radius:3px; padding:2px 4px; outline:none; cursor:pointer;
+    }
+    #audio-device-status { font-size:9px; color:rgba(74,222,128,0.7); display:none; flex-shrink:0; }
+    #blackhole-hint {
+      display:none; font-size:9px; color:rgba(251,191,36,0.75);
+      padding:3px 10px; border-top:1px solid rgba(255,255,255,0.05);
+      flex-shrink:0; -webkit-app-region:no-drag;
+    }
+
+    /* Bottom action bar */
+    #action-bar {
+      height:44px; display:flex; align-items:center; gap:6px;
+      padding:0 10px; flex-shrink:0; -webkit-app-region:no-drag;
+      background:rgba(255,255,255,0.02);
+      border-top:1px solid rgba(255,255,255,0.07);
+    }
+    .bar-btn {
+      height:28px; padding:0 10px; font-size:10px;
+      border-radius:5px; cursor:pointer; border:1px solid;
+      background:transparent; font-family:inherit; transition:opacity 0.2s;
+      white-space:nowrap;
+    }
+    .bar-btn:hover { opacity:0.75; }
+    .bar-btn:disabled { opacity:0.3; cursor:not-allowed; }
+    #transcript-btn { color:#a78bfa; border-color:#a78bfa; }
+    #capture-btn { color:#4ade80; border-color:#4ade80; }
+    #settings-btn { color:rgba(255,255,255,0.35); border-color:rgba(255,255,255,0.12); padding:0 8px; font-size:12px; }
+    .spacer { flex:1; }
+
+    /* Room panel (slide-in right) */
+    #room-panel-wrapper {
+      display:none; width:280px; flex-shrink:0;
+      border-left:1px solid rgba(255,255,255,0.08);
+      flex-direction:column; height:100%;
+      background: rgba(0,0,0,0.88);
+    }
+    #room-panel-wrapper .panel-header { -webkit-app-region:no-drag; }
+    .room-input {
+      background:rgba(255,255,255,0.07); color:#fff;
+      border:1px solid rgba(255,255,255,0.15); border-radius:4px;
+      padding:5px 8px; font-size:11px; font-family:inherit; outline:none;
+      width:100%;
+    }
+    .room-btn {
+      padding:5px 10px; font-size:10px; border-radius:4px;
+      cursor:pointer; border:1px solid; background:transparent;
+      font-family:inherit; transition:opacity 0.2s; white-space:nowrap;
+    }
+    .room-btn:hover { opacity:0.75; }
+    #room-create-btn { color:#4ade80; border-color:#4ade80; }
+    #join-room-btn { color:#60a5fa; border-color:#60a5fa; }
+    #leave-room-btn { color:#ef4444; border-color:#ef4444; }
+    #room-notepad {
+      flex:1; background:transparent; border:none; outline:none; resize:none;
+      color:#fff; font-size:12px; line-height:1.6; padding:10px;
+      font-family:'Consolas','Monaco','Courier New',monospace;
+    }
+    .room-screenshot-view { height:120px; display:flex; align-items:center; justify-content:center; overflow:hidden; border-top:1px solid rgba(255,255,255,0.07); }
+    #room-screenshot-img { width:100%; height:100%; object-fit:contain; display:none; }
+    #room-screenshot-ph { font-size:10px; color:rgba(255,255,255,0.15); }
+
+    /* Legacy room-panel id kept for IPC toggle-room-panel handler compat */
+    #room-panel { display:none; }
+
+    /* Notepad overlay (hidden by default, shown via tab) */
+    #notepad-overlay {
+      display:none; position:fixed; inset:0; z-index:100;
+      background:rgba(0,0,0,0.92); backdrop-filter:blur(12px);
+      flex-direction:column; -webkit-app-region:no-drag;
+    }
+    #notepad-overlay .panel-header { -webkit-app-region:no-drag; }
+    #notepad { flex:1; background:transparent; border:none; outline:none; resize:none; color:#fff; font-size:14px; line-height:1.6; padding:15px; font-family:'Consolas','Monaco','Courier New',monospace; -webkit-app-region:no-drag; }
+
+    /* Screenshot modal */
+    #screenshot-modal {
+      display:none; position:fixed; inset:0; z-index:200;
+      background:rgba(0,0,0,0.95); backdrop-filter:blur(15px);
+      flex-direction:column; align-items:center; justify-content:center;
+      gap:10px; -webkit-app-region:no-drag;
+    }
+    #screenshot-img { max-width:90%; max-height:75vh; object-fit:contain; border-radius:6px; display:none; }
+    #screenshot-placeholder { color:rgba(255,255,255,0.15); font-size:12px; }
+    #screenshot-actions { display:flex; gap:8px; }
+
+    /* Session modal */
+    #session-modal {
+      display:none; position:fixed; inset:0; z-index:300;
+      background:rgba(0,0,0,0.92); backdrop-filter:blur(12px);
+      align-items:center; justify-content:center; -webkit-app-region:no-drag;
+    }
+    .session-modal-box { background:rgba(18,18,18,0.98); border:1px solid rgba(255,255,255,0.12); border-radius:10px; padding:24px; width:300px; display:flex; flex-direction:column; gap:14px; }
+    .session-modal-title { font-size:13px; color:rgba(255,255,255,0.8); font-weight:600; text-align:center; }
+    .session-field { display:flex; flex-direction:column; gap:4px; }
+    .session-field label { font-size:10px; color:rgba(255,255,255,0.4); text-transform:uppercase; letter-spacing:0.05em; }
+    .session-field input, .session-field select { background:rgba(255,255,255,0.07); border:1px solid rgba(255,255,255,0.15); border-radius:5px; padding:6px 10px; color:#fff; font-size:12px; font-family:inherit; outline:none; }
+    .session-field input:focus, .session-field select:focus { border-color:rgba(251,191,36,0.5); }
+    .session-field select option { background:#111; }
+    .session-modal-actions { display:flex; gap:8px; margin-top:4px; }
+    #session-cancel-btn { flex:1; padding:7px; font-size:11px; border-radius:5px; cursor:pointer; border:1px solid rgba(255,255,255,0.15); background:transparent; color:rgba(255,255,255,0.5); font-family:inherit; }
+    #session-start-btn { flex:2; padding:7px; font-size:11px; border-radius:5px; cursor:pointer; border:1px solid rgba(251,191,36,0.5); background:rgba(251,191,36,0.12); color:rgba(251,191,36,0.9); font-family:inherit; font-weight:500; }
+
+    /* AI spinner */
+    .ai-spinner {
+      display: inline-block;
+      width: 10px; height: 10px;
+      border: 2px solid rgba(251,191,36,0.3);
+      border-top-color: rgba(251,191,36,0.9);
+      border-radius: 50%;
+      animation: ai-spin 0.7s linear infinite;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+    @keyframes ai-spin { to { transform: rotate(360deg); } }
+
+    /* Misc */
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+    @keyframes slideIn { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+    /* Custom tooltip */
+    #custom-tooltip { transition: opacity 0.1s; }
+    #custom-tooltip kbd {
+      display: inline-block;
+      background: rgba(255,255,255,0.12);
+      border: 1px solid rgba(255,255,255,0.2);
+      border-radius: 3px;
+      padding: 0 5px;
+      font-size: 9px;
+      font-family: monospace;
+      color: #94a3b8;
+      margin-top: 3px;
+    }
+    @keyframes slideOut { from{transform:translateX(0);opacity:1} to{transform:translateX(100%);opacity:0} }
+
+    /* Suppress autofill background injection on all inputs */
+    input:-webkit-autofill,
+    input:-webkit-autofill:hover,
+    input:-webkit-autofill:focus,
+    input:-webkit-autofill:active {
+      -webkit-box-shadow: 0 0 0 100px #1a1a2e inset !important;
+      -webkit-text-fill-color: #ffffff !important;
+      caret-color: #ffffff;
+    }
+
+    /* Keep chat input background stable on focus */
+    #chat-input:focus {
+      background: #1a1a2e !important;
+      outline: none;
+      border-color: rgba(124,107,224,0.5) !important;
+    }
+
+    textarea::placeholder { color: rgba(255,255,255,0.3); }
+    textarea::-webkit-scrollbar { width: 8px; }
+    textarea::-webkit-scrollbar-track { background: transparent; }
+    textarea::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
+    textarea::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+  </style>
+</head>
+<body>
+
+  <!-- ===== BAR MODE ===== -->
+  <div id="bar-mode">
+    <span class="bar-icon" style="-webkit-app-region:no-drag;cursor:pointer;" id="bar-click-area">🔒</span>
+    <span id="bar-timer" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand>00:00</span>
+    <span id="bar-rec-dot"></span>
+    <span id="bar-preview" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand>Ready — press ⌘⇧N to show</span>
+    <button id="bar-expand-btn" data-tip="Expand AI panel<br><kbd>Ctrl+Shift+P</kbd>">▲ Open</button>
+  </div>
+
+  <!-- ===== PANEL MODE ===== -->
+  <div id="panel-mode">
+
+    <!-- AI Panel (main) -->
+    <div id="ai-panel">
+
+      <!-- Header -->
+      <div class="panel-header">
+        <span class="panel-header-title">🔒 Stealth</span>
+        <span id="session-badge"></span>
+        <span id="session-timer">00:00</span>
+        <span class="header-spacer"></span>
+        <span id="opacity-display" style="font-size:9px;color:rgba(255,255,255,0.25);">100%</span>
+        <button class="panel-header-btn" id="stealth-toggle-btn" data-tip="Toggle stealth mode<br>OFF = visible in screen share<br><kbd>Ctrl+Shift+V</kbd>" style="color:rgba(74,222,128,0.8);border:1px solid rgba(74,222,128,0.2);border-radius:3px;padding:1px 6px;">🔒</button>
+        <button class="panel-header-btn" id="session-btn" data-tip="Set session context<br>Company · Role · Language">🎯</button>
+        <button class="panel-header-btn" id="minimize-btn" data-tip="Hide window<br><kbd>ESC</kbd>">−</button>
+        <button class="panel-header-btn" id="close-btn" data-tip="Quit app">✕</button>
+        <button class="panel-header-btn" id="collapse-to-bar-btn" data-tip="Collapse to thin bar">▼</button>
+      </div>
+
+      <!-- AI Answer Feed -->
+      <div id="ai-feed-section">
+        <div class="section-header" data-interactive>
+          <span>AI Answer</span>
+          <button id="auto-answer-btn" data-tip="Auto-detect questions &amp; answer<br><kbd>Ctrl+Shift+B</kbd>" style="font-size:9px;background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.25);border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(74,222,128,0.85);">⚡ Auto</button>
+          <button id="ai-autoscroll-btn" data-tip="Auto-scroll AI feed<br><kbd>Ctrl+Shift+L</kbd>" style="font-size:9px;background:transparent;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(251,191,36,0.85);">↓ Auto</button>
+          <button id="clear-ai-btn" data-tip="Clear AI feed &amp; reset context<br><kbd>Ctrl+Shift+X</kbd>" style="font-size:9px;background:transparent;border:none;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,0.2);">✕</button>
+        </div>
+        <div id="ai-feed"></div>
+        <!-- AI action buttons -->
+        <div id="ai-actions">
+          <button id="analyze-screen-btn" class="ai-btn" data-tip="Analyze screenshot with AI<br><kbd>Ctrl+Shift+A</kbd>" style="color:#f59e0b;border-color:#f59e0b;">🔍 Screen</button>
+          <button id="analyze-audio-btn" class="ai-btn" data-tip="Summarize &amp; analyze transcript" style="color:#f59e0b;border-color:#f59e0b;">🧠 Audio</button>
+          <button id="analyze-both-btn" class="ai-btn" data-tip="Analyze screenshot + transcript<br><kbd>Ctrl+Shift+A</kbd>" style="color:#f59e0b;border-color:#f59e0b;">⚡ Both</button>
+          <button id="answer-question-btn" class="ai-btn" data-tip="Extract question from transcript<br>and answer it with AI" style="color:#a78bfa;border-color:#a78bfa;">💬 Answer</button>
+        </div>
+        <!-- Direct chat input -->
+        <div id="chat-input-row" style="display:flex;gap:6px;padding:6px 10px;border-top:1px solid rgba(255,255,255,0.06);flex-shrink:0;-webkit-app-region:no-drag;">
+          <input id="chat-input" type="text" placeholder="Ask AI anything…"
+            style="flex:1;background:#1a1a2e;border:1px solid rgba(255,255,255,0.18);border-radius:5px;padding:5px 10px;color:#ffffff;font-size:11px;font-family:inherit;outline:none;" />
+          <button id="chat-send-btn" data-tip="Send message<br><kbd>Enter</kbd>"
+            style="padding:5px 12px;font-size:10px;border-radius:5px;cursor:pointer;border:1px solid #7c6be0;background:#2d2456;color:#d4c8ff;font-family:inherit;white-space:nowrap;transition:opacity 0.2s;">Send</button>
+        </div>
+      </div>
+
+      <!-- Transcript Feed -->
+      <div id="transcript-section">
+        <div class="section-header" data-interactive>
+          <span>Transcript</span>
+          <select id="whisper-lang" style="font-size:9px;background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.4);border:none;border-radius:3px;padding:1px 4px;cursor:pointer;outline:none;">
+            <option value="en">EN</option>
+            <option value="hi">HI</option>
+            <option value="es">ES</option>
+            <option value="fr">FR</option>
+            <option value="de">DE</option>
+            <option value="pt">PT</option>
+            <option value="ar">AR</option>
+            <option value="zh">ZH</option>
+            <option value="ja">JA</option>
+            <option value="">Auto</option>
+          </select>
+        </div>
+        <div id="transcript-feed"></div>
+      </div>
+
+      <!-- Audio device selector -->
+      <div id="audio-device-row">
+        <label>Audio:</label>
+        <select id="audio-device-select"></select>
+        <span id="audio-device-status">● System</span>
+      </div>
+      <div id="blackhole-hint">⚠ Install BlackHole 2ch for system audio on macOS</div>
+
+      <!-- Bottom action bar -->
+      <div id="action-bar">
+        <button id="transcript-btn" class="bar-btn" data-tip="Toggle audio recording<br><kbd>Ctrl+Shift+T</kbd>">🎙 Record</button>
+        <button id="capture-btn" class="bar-btn" data-tip="Capture &amp; share screenshot<br><kbd>Ctrl+Shift+I</kbd>">📸 Screen</button>
+        <div class="spacer"></div>
+        <button id="settings-btn" class="bar-btn" data-tip="Settings<br>API key · Preferences<br><kbd>Ctrl+Shift+,</kbd>">⚙</button>
+      </div>
+
+    </div>
+
+    <!-- Room Panel (slide-in) -->
+    <div id="room-panel-wrapper">
+      <div class="panel-header" style="-webkit-app-region:no-drag;">
+        <span class="panel-header-title">🤝 Room</span>
+        <span id="room-id-display" style="font-size:10px;font-family:monospace;color:rgba(255,255,255,0.5);">—</span>
+        <span id="room-status" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></span>
+        <span class="header-spacer"></span>
+      </div>
+      <div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px;flex-shrink:0;-webkit-app-region:no-drag;">
+        <div style="display:flex;gap:5px;">
+          <button id="create-room-btn" class="room-btn" style="color:#4ade80;border-color:#4ade80;">Create</button>
+          <input id="join-input" class="room-input" type="text" placeholder="Room ID" style="flex:1;" />
+          <button id="join-room-btn" class="room-btn" style="color:#60a5fa;border-color:#60a5fa;">Join</button>
+        </div>
+        <div style="display:flex;gap:5px;">
+          <button id="leave-room-btn" class="room-btn" style="color:#ef4444;border-color:#ef4444;flex:1;">Leave Room</button>
+          <button id="capture-room-btn" class="room-btn" style="color:#4ade80;border-color:#4ade80;">📸 Share</button>
+        </div>
+      </div>
+      <textarea id="room-notepad" placeholder="Shared notepad — everyone in the room sees this…"></textarea>
+      <div class="room-screenshot-view">
+        <span id="room-screenshot-ph">No screenshot</span>
+        <img id="room-screenshot-img" alt="Shared screenshot" />
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ===== NOTEPAD OVERLAY ===== -->
+  <div id="notepad-overlay">
+    <div class="panel-header">
+      <span class="panel-header-title">📝 Notepad</span>
+      <span class="header-spacer"></span>
+      <button class="panel-header-btn" id="notepad-close-btn">✕ Close</button>
+    </div>
+    <textarea id="notepad" placeholder="Private notes — invisible during screen sharing…"></textarea>
+  </div>
+
+  <!-- ===== SCREENSHOT MODAL ===== -->
+  <div id="screenshot-modal">
+    <img id="screenshot-img" alt="Screenshot" />
+    <div id="screenshot-placeholder">No screenshot yet</div>
+    <div id="screenshot-actions">
+      <button id="screenshot-analyze-btn" class="room-btn" style="color:#f59e0b;border-color:#f59e0b;">⚡ Analyze</button>
+      <button id="screenshot-close-btn" class="room-btn" style="color:rgba(255,255,255,0.4);border-color:rgba(255,255,255,0.15);">Close</button>
+    </div>
+  </div>
+
+  <!-- ===== SESSION MODAL ===== -->
+  <div id="session-modal">
+    <div class="session-modal-box">
+      <div class="session-modal-title">🎯 Session Context</div>
+      <div class="session-field">
+        <label>Company</label>
+        <input id="session-company" type="text" placeholder="e.g. Google" autocomplete="off" />
+      </div>
+      <div class="session-field">
+        <label>Role</label>
+        <input id="session-role" type="text" placeholder="e.g. Software Engineer" autocomplete="off" />
+      </div>
+      <div class="session-field">
+        <label>Language</label>
+        <select id="session-language">
+          <option value="en">English</option>
+          <option value="hi">Hindi</option>
+          <option value="es">Spanish</option>
+          <option value="fr">French</option>
+          <option value="de">German</option>
+          <option value="pt">Portuguese</option>
+          <option value="ar">Arabic</option>
+          <option value="zh">Chinese</option>
+          <option value="ja">Japanese</option>
+          <option value="">Auto-detect</option>
+        </select>
+      </div>
+      <div class="session-modal-actions">
+        <button id="session-cancel-btn">Cancel</button>
+        <button id="session-start-btn">Start Session</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Legacy hidden element kept for any residual IPC references -->
+  <div id="room-panel" style="display:none;"></div>
+
+  <!-- ===== SETTINGS MODAL ===== -->
+  <div id="settings-modal" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.92);backdrop-filter:blur(12px);align-items:center;justify-content:center;-webkit-app-region:no-drag;">
+    <div style="background:rgba(18,18,18,0.98);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:24px;width:320px;display:flex;flex-direction:column;gap:14px;">
+      <div style="font-size:13px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center;">&#9881; Settings</div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <label style="font-size:10px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em;">OpenRouter API Key</label>
+        <input id="api-key-input" type="password" placeholder="sk-or-v1-..." autocomplete="off"
+          style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:6px 10px;color:#fff;font-size:12px;font-family:inherit;outline:none;" />
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;">
+        <span style="font-size:9px;color:rgba(255,255,255,0.25);">Key is stored encrypted in your OS keychain. Never leaves your device.</span>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px;">
+        <button id="settings-cancel-btn" style="flex:1;padding:7px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid rgba(255,255,255,0.15);background:transparent;color:rgba(255,255,255,0.5);font-family:inherit;">Cancel</button>
+        <button id="settings-clear-btn" style="flex:1;padding:7px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid rgba(239,68,68,0.4);background:transparent;color:rgba(239,68,68,0.7);font-family:inherit;">Clear Key</button>
+        <button id="settings-save-btn" style="flex:2;padding:7px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid rgba(74,222,128,0.4);background:rgba(74,222,128,0.08);color:rgba(74,222,128,0.9);font-family:inherit;font-weight:500;">Save Key</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
