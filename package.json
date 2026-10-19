@@ -6,10 +6,14 @@
   "scripts": {
     "start": "electron .",
     "server": "node server.js",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:all": "electron-builder --mac --win",
-    "rebuild": "npx @electron/rebuild -f -w nodejs-whisper"
+    "build:mac": "electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:linux": "electron-builder --linux --publish never",
+    "build:all": "electron-builder --mac --win --publish never",
+    "rebuild": "electron-rebuild -f -w nodejs-whisper"
+  },
+  "engines": {
+    "node": ">=22.12.0 <23"
   },
   "keywords": [
     "electron",
@@ -19,17 +23,18 @@
   ],
   "author": "Your Name",
   "license": "MIT",
+  "desktopName": "stealth-notepad",
   "devDependencies": {
-    "electron": "^41.0.0",
-    "electron-builder": "^26.8.1",
+    "electron": "^41.10.7",
+    "electron-builder": "^26.15.3",
     "@electron/rebuild": "^4.0.4"
   },
   "dependencies": {
     "dotenv": "^16.0.0",
     "nodejs-whisper": "^0.1.16",
     "openai": "^4.104.0",
-    "socket.io": "^4.8.3",
-    "socket.io-client": "^4.8.3"
+    "socket.io": "^4.8.4",
+    "socket.io-client": "^4.8.4"
   },
   "build": {
     "appId": "com.stealth.notepad",
@@ -58,7 +63,6 @@
       "!node_modules/**/LICENSE*",
       "!node_modules/**/LICENCE*",
       "!node_modules/**/.npmignore",
-      "!node_modules/**/Makefile",
       "!node_modules/electron/**/*",
       "!node_modules/electron-builder/**/*",
       "!node_modules/@anthropic-ai/**/*",
@@ -89,8 +93,8 @@
       "category": "public.app-category.productivity",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.plist"
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
     },
     "win": {
       "target": [
@@ -101,6 +105,18 @@
           ]
         }
       ]
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Utility",
+      "syncDesktopName": true
     }
   }
 }
