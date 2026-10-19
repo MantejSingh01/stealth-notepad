@@ -54,7 +54,7 @@ test('showing the window reapplies content protection', async () => {
   await withMain('darwin', async (ctx) => {
     const win = ctx.state.windows[0];
     const before = win.calls.filter((c) => c[0] === 'setContentProtection').length;
-    ctx.state.shortcuts.get('CommandOrControl+Shift+N')();
+    ctx.state.shortcuts.get('CommandOrControl+Alt+N')();
     const after = win.calls.filter((c) => c[0] === 'setContentProtection').length;
     expect(after).toBeGreaterThan(before);
   });
@@ -63,9 +63,9 @@ test('showing the window reapplies content protection', async () => {
 test('Escape is registered only while the window is visible', async () => {
   await withMain('linux', async (ctx) => {
     expect(ctx.state.shortcuts.has('Escape')).toBe(false);
-    ctx.state.shortcuts.get('CommandOrControl+Shift+N')();
+    ctx.state.shortcuts.get('CommandOrControl+Alt+N')();
     expect(ctx.state.shortcuts.has('Escape')).toBe(true);
-    ctx.state.shortcuts.get('CommandOrControl+Shift+N')();
+    ctx.state.shortcuts.get('CommandOrControl+Alt+N')();
     expect(ctx.state.shortcuts.has('Escape')).toBe(false);
   });
 });
@@ -209,7 +209,7 @@ test.fails('[known bug] content protection is applied before the window is shown
     const win = ctx.state.windows[0];
     win.calls = win.calls.filter((c) => c[0] === 'hide' || c[0] === 'setContentProtection' || c[0] === 'show');
     win.calls.length = 0;
-    ctx.state.shortcuts.get('CommandOrControl+Shift+N')();
+    ctx.state.shortcuts.get('CommandOrControl+Alt+N')();
     const showAt = win.calls.findIndex((c) => c[0] === 'show');
     const protectAt = win.calls.findIndex((c) => c[0] === 'setContentProtection' && c[1] === true);
     expect(showAt).toBeGreaterThanOrEqual(0);
@@ -227,22 +227,57 @@ test.fails('[known bug] the renderer is sandboxed', async () => {
   });
 });
 
-test.fails('[known bug] a second instance is refused', () => {
+test('a second instance is refused', async () => {
   expect(readAppFile('main.js')).toMatch(/requestSingleInstanceLock/);
+  await withMain('linux', async (ctx) => {
+    expect(ctx.state.lockRequested).toBe(true);
+  });
 });
 
-test.fails('[known bug] quit flushes note storage', () => {
+test('quit flushes note storage', async () => {
   expect(readAppFile('main.js')).toMatch(/flushStorageData/);
+  await withMain('linux', async (ctx) => {
+    ctx.state.ipcListeners.get('close')(ctx.event);
+    expect(ctx.state.flushCount).toBe(1);
+    for (const cb of ctx.state.appListeners.get('will-quit') || []) cb();
+    expect(ctx.state.flushCount).toBe(2);
+  });
 });
 
-test.fails('[known bug] API key writes are atomic', () => {
+test('API key writes are atomic', async () => {
   const body = between(readAppFile('main.js'), "ipcMain.handle('save-api-key'", "ipcMain.handle('load-api-key'");
   expect(body).toMatch(/renameSync|\brename\(/);
   expect(body).not.toMatch(/writeFileSync\(\s*KEY_FILE/);
+  await withMain('linux', async (ctx) => {
+    await ctx.state.ipcHandlers.get('save-api-key')(ctx.event, 'sk-secret');
+    expect(fs.existsSync(ctx.keyFile)).toBe(true);
+    expect(fs.existsSync(`${ctx.keyFile}.${process.pid}.tmp`)).toBe(false);
+  });
 });
 
-test.fails('[known bug] screenshot capture uses the display the window is on', () => {
+test('screenshot capture uses the display the window is on', async () => {
   const body = between(readAppFile('main.js'), "ipcMain.handle('capture-screenshot'", "ipcMain.handle('save-api-key'");
   expect(body).toMatch(/getDisplayMatching|sources\.find/);
   expect(body).not.toMatch(/sources\[0\]/);
+  await withMain('linux', async (ctx) => {
+    const image = await ctx.state.ipcHandlers.get('capture-screenshot')(ctx.event);
+    const expected = Buffer.from('current-display').toString('base64');
+    expect(image).toBe(`data:image/jpeg;base64,${expected}`);
+    const sourceId = await ctx.state.ipcHandlers.get('get-screen-source-id')(ctx.event);
+    expect(sourceId).toBe('screen:2');
+  });
+});
+
+test('snap uses the display the window is on', async () => {
+  await withMain('linux', async (ctx) => {
+    ctx.state.shortcuts.get('CommandOrControl+Alt+U')();
+    const pos = ctx.state.windows[0].calls.find((c) => c[0] === 'setPosition');
+    expect(pos).toEqual(['setPosition', 1930, 10]);
+  });
+});
+
+test('show and hide is Ctrl/Cmd+Alt+N only', () => {
+  const body = between(readAppFile('main.js'), 'function registerHotkeys', 'function setEscapeShortcut');
+  expect(body).toMatch(/CommandOrControl\+Alt\+N/);
+  expect(body).not.toMatch(/CommandOrControl\+Shift\+N/);
 });

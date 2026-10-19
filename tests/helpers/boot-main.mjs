@@ -32,11 +32,22 @@ export async function bootMain(options = {}) {
     ipcListeners: new Map(),
     appListeners: new Map(),
     encryptionAvailable: options.encryptionAvailable !== false,
-    sources: [{
-      id: 'screen:0',
-      thumbnail: { toJPEG: () => Buffer.from('jpeg-bytes') },
-    }],
+    sources: [
+      {
+        id: 'screen:1',
+        display_id: '1',
+        thumbnail: { toJPEG: () => Buffer.from('primary-display') },
+      },
+      {
+        id: 'screen:2',
+        display_id: '2',
+        thumbnail: { toJPEG: () => Buffer.from('current-display') },
+      },
+    ],
     dockHidden: false,
+    lockRequested: false,
+    singleInstanceLock: true,
+    flushCount: 0,
     releaseReady: () => {},
   };
 
@@ -62,8 +73,9 @@ export async function bootMain(options = {}) {
     focus() {}
     setOpacity() {}
     getSize() { return [400, 52]; }
+    getBounds() { return { x: 2000, y: 40, width: 400, height: 52 }; }
     setSize() {}
-    setPosition() {}
+    setPosition(x, y) { this.calls.push(['setPosition', x, y]); }
     getNativeWindowHandle() { return Buffer.alloc(8); }
     isDestroyed() { return false; }
     on() {}
@@ -88,10 +100,15 @@ export async function bootMain(options = {}) {
       },
       quit() { state.quit = true; },
       exit(code) { state.exitCode = code; },
+      requestSingleInstanceLock() {
+        state.lockRequested = true;
+        return state.singleInstanceLock !== false;
+      },
     },
     session: {
       defaultSession: {
         setPermissionRequestHandler(handler) { state.permissionHandler = handler; },
+        flushStorageData() { state.flushCount += 1; },
       },
     },
     BrowserWindow,
@@ -126,7 +143,8 @@ export async function bootMain(options = {}) {
       },
     },
     screen: {
-      getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+      getPrimaryDisplay: () => ({ id: 1, workArea: { x: 0, y: 0, width: 1440, height: 900 } }),
+      getDisplayMatching: () => ({ id: 2, workArea: { x: 1920, y: 0, width: 1280, height: 800 } }),
     },
     desktopCapturer: {
       getSources: async () => state.sources,

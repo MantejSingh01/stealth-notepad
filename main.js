@@ -193,10 +193,40 @@ function logNativeHelper() {
  * Snap the window to one of 6 named positions.
  * @param {'top-left'|'top-center'|'top-right'|'bottom-left'|'bottom-center'|'bottom-right'} pos
  */
+function windowDisplay() {
+  const bounds = mainWindow && !mainWindow.isDestroyed() && typeof mainWindow.getBounds === 'function'
+    ? mainWindow.getBounds()
+    : { x: 0, y: 0, width: 0, height: 0 };
+  if (typeof screen.getDisplayMatching === 'function') {
+    try {
+      return screen.getDisplayMatching(bounds);
+    } catch (err) {
+      log('getDisplayMatching failed', err);
+    }
+  }
+  return screen.getPrimaryDisplay();
+}
+
+function sourceOnWindowDisplay(sources) {
+  if (!Array.isArray(sources) || sources.length === 0) return null;
+  let displayId = '';
+  try {
+    const display = windowDisplay();
+    if (display && display.id != null) displayId = String(display.id);
+  } catch (err) {
+    log('display lookup failed', err);
+  }
+  if (displayId) {
+    const match = sources.find((item) => item && String(item.display_id) === displayId);
+    if (match) return match;
+  }
+  return sources.find((item) => item && item.id) || null;
+}
+
 function snapTo(pos) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   if (!SNAP_POSITIONS.has(pos)) return;
-  const { x: sx, y: sy, width: sw, height: sh } = screen.getPrimaryDisplay().workArea;
+  const { x: sx, y: sy, width: sw, height: sh } = windowDisplay().workArea;
   const [ww, wh] = mainWindow.getSize();
 
   const centerX = sx + Math.round((sw - ww) / 2);
@@ -319,10 +349,8 @@ function registerHotkeys() {
   if (hotkeysRegistered) return;
   hotkeysRegistered = true;
 
-  // Show/hide. Ctrl/Cmd+Shift+N is the historical binding and conflicts with
-  // browser private windows. Ctrl/Cmd+Alt+N does not, and is the one to use.
+  // Show/hide. Ctrl/Cmd+Alt+N does not conflict with browser private windows.
   registerShortcut('CommandOrControl+Alt+N', () => toggleWindow());
-  registerShortcut('CommandOrControl+Shift+N', () => toggleWindow());
 
   registerShortcut('CommandOrControl+Shift+C', () => {
     if (mainWindow && isVisible) mainWindow.webContents.send('clear-text');
@@ -525,6 +553,7 @@ ipcMain.on('minimize', (event) => {
 
 ipcMain.on('close', (event) => {
   if (!fromMainWindow(event)) return;
+  flushStorageData();
   app.quit();
 });
 
@@ -569,7 +598,8 @@ ipcMain.handle('get-screen-source-id', async (event) => {
   if (!fromMainWindow(event)) return null;
   try {
     const sources = await desktopCapturer.getSources({ types: ['screen'] });
-    return sources.length ? sources[0].id : null;
+    const source = sourceOnWindowDisplay(sources);
+    return source ? source.id : null;
   } catch (err) {
     log('get-screen-source-id failed', err);
     return null;
@@ -583,8 +613,11 @@ ipcMain.handle('capture-screenshot', async (event) => {
       types: ['screen'],
       thumbnailSize: { width: 1280, height: 720 },
     });
-    if (!sources.length) return null;
-    return `data:image/jpeg;base64,${sources[0].thumbnail.toJPEG(65).toString('base64')}`;
+    const display = screen.getDisplayMatching(mainWindow.getBounds());
+    const source = sources.find((item) => item && String(item.display_id) === String(display.id))
+      || sources.find((item) => item && item.thumbnail);
+    if (!source) return null;
+    return `data:image/jpeg;base64,${source.thumbnail.toJPEG(65).toString('base64')}`;
   } catch (err) {
     log('capture-screenshot failed', err);
     return null;
@@ -600,12 +633,15 @@ ipcMain.handle('save-api-key', (event, plaintext) => {
     log('refusing to store API key; OS encryption is unavailable');
     return { ok: false, encrypted: false, error: 'encryption-unavailable' };
   }
+  const tmpFile = `${KEY_FILE}.${process.pid}.tmp`;
   try {
     const encrypted = safeStorage.encryptString(key);
-    fs.writeFileSync(KEY_FILE, encrypted, { mode: 0o600 });
-    try { fs.chmodSync(KEY_FILE, 0o600); } catch (_) { /* Windows ignores the mode bit */ }
+    fs.writeFileSync(tmpFile, encrypted, { mode: 0o600 });
+    try { fs.chmodSync(tmpFile, 0o600); } catch (_) { /* Windows ignores the mode bit */ }
+    fs.renameSync(tmpFile, KEY_FILE);
     return { ok: true, encrypted: true };
   } catch (err) {
+    try { fs.unlinkSync(tmpFile); } catch (_) { /* the temp file may not exist */ }
     log('save-api-key failed', err);
     return { ok: false, error: 'write-failed' };
   }
@@ -666,7 +702,34 @@ app.on('child-process-gone', (_event, details) => {
   logProcessGone('child process gone', details);
 });
 
+function claimSingleInstance() {
+  if (typeof app.requestSingleInstanceLock !== 'function') return true;
+  if (!app.requestSingleInstanceLock()) {
+    app.quit();
+    return false;
+  }
+  app.on('second-instance', () => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) showWindow();
+    } catch (err) {
+      log('second-instance failed', err);
+    }
+  });
+  return true;
+}
+
+function flushStorageData() {
+  try {
+    if (session.defaultSession && typeof session.defaultSession.flushStorageData === 'function') {
+      session.defaultSession.flushStorageData();
+    }
+  } catch (err) {
+    log('flushStorageData failed', err);
+  }
+}
+
 app.whenReady().then(() => {
+  if (!claimSingleInstance()) return;
   installSessionGuards();
   logNativeHelper();
   const whisperStatus = whisperRuntimeStatus();
@@ -687,6 +750,7 @@ app.on('activate', () => {
 });
 
 app.on('will-quit', () => {
+  flushStorageData();
   globalShortcut.unregisterAll();
   stopLocalCollabServer();
 });
