@@ -1,0 +1,5 @@
+# The collab server only needs production dependencies.
+# Nixpacks sets NPM_CONFIG_PRODUCTION=false, so a plain `npm ci`
+# also installs the Electron toolchain into the service image.
+[phases.install]
+cmds = ["NPM_CONFIG_PRODUCTION=true npm ci --omit=dev"]
