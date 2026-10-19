@@ -132,8 +132,16 @@ let barPreviewText = stealthCaptureSupported
 function announce(message) {
   const live = document.getElementById('live-status');
   if (!live || !message) return;
+  // Clearing first lets a repeated message be announced again. The timeout
+  // covers a hidden window, where requestAnimationFrame may not run.
+  const token = (announce.token = (announce.token || 0) + 1);
   live.textContent = '';
-  requestAnimationFrame(() => { live.textContent = message; });
+  const write = () => {
+    if (announce.token !== token || live.textContent === message) return;
+    live.textContent = message;
+  };
+  requestAnimationFrame(write);
+  setTimeout(write, 60);
 }
 
 /** @param {string} [text] */
@@ -717,7 +725,42 @@ function recordChunk(stream) {
   }, CHUNK_MS);
 }
 
+let whisperBlocked = false;
+
+/**
+ * Ask main whether nodejs-whisper can run. PR #3 returns
+ * { ok, code, root, error } and { ok:false, code:'packed-in-asar' } for packaged builds.
+ * A missing handler (main without that IPC) resolves as "try anyway".
+ * @returns {Promise<boolean>}
+ */
+async function transcriptionRuntimeReady() {
+  if (whisperBlocked) return false;
+  /** @type {unknown} */
+  let status = null;
+  try {
+    status = await ipcRenderer.invoke('get-whisper-status');
+  } catch {
+    return true;
+  }
+  if (status == null || typeof status !== 'object') return true;
+  const ok = /** @type {{ ok?: unknown }} */ (status).ok;
+  if (ok === true) return true;
+  if (ok === false) {
+    blockTranscription();
+    return false;
+  }
+  return true;
+}
+
+function blockTranscription() {
+  if (whisperBlocked) return;
+  whisperBlocked = true;
+  stopTranscription({ silent: true });
+  appendTranscript('Transcription unavailable in this build', 'local', true);
+}
+
 async function processChunk() {
+  if (!(await transcriptionRuntimeReady())) return;
   const blob = new Blob(audioChunks, { type: 'audio/webm' });
   const buf  = Buffer.from(await blob.arrayBuffer());
   const tmp  = path.join(os.tmpdir(), `stealth-${Date.now()}.webm`);
@@ -754,7 +797,7 @@ async function processChunk() {
     const e = /** @type {Error & { code?: string }} */ (err);
     if (e.code === 'MODULE_NOT_FOUND') {
       appendTranscript('Transcription engine is not installed. Run npm install, then npm run rebuild.', 'local', true);
-      stopTranscription();
+      stopTranscription({ silent: true });
     } else {
       appendTranscript(`Transcription error: ${e.message}`, 'local', true);
     }
@@ -915,11 +958,16 @@ async function startTranscription() {
   }
 }
 
-function stopTranscription() {
+/** @param {{ silent?: boolean }} [options] */
+function stopTranscription(options = {}) {
   isTranscribing = false;
-  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
+  const recorder = mediaRecorder;
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  if (recorder && recorder.stream) {
+    recorder.stream.getTracks().forEach((track) => track.stop());
+  }
   setRecordingUi(false);
-  announce('Recording stopped');
+  if (!options.silent) announce('Recording stopped');
 }
 
 if (transcriptBtn) {
@@ -1561,15 +1609,72 @@ if (chatInput)   chatInput.addEventListener('keydown', (e) => {
 });
 
 // ── Settings modal ────────────────────────────────────────────────────────────
-/** @param {string} [message] */
-function refreshApiKeyStatus(message) {
+/**
+ * Normalize save-api-key / clear-api-key results.
+ * PR #3 returns { ok:true } or { ok:false, error }.
+ * The previous main process returns { ok:true, encrypted } or, if a handler
+ * returns nothing, undefined. A thrown invoke is handled by the caller.
+ * @param {unknown} result
+ * @returns {{ ok: true, legacy?: boolean, encrypted?: unknown } | { ok: false, error: string }}
+ */
+function readIpcAck(result) {
+  if (result == null) return { ok: true, legacy: true };
+  if (typeof result !== 'object') return { ok: false, error: '' };
+  const rec = /** @type {{ ok?: unknown, error?: unknown, encrypted?: unknown }} */ (result);
+  if (rec.ok === true) return { ok: true, encrypted: rec.encrypted };
+  if (rec.ok === false) return { ok: false, error: typeof rec.error === 'string' ? rec.error : '' };
+  return { ok: false, error: '' };
+}
+
+/** @type {Record<string, string>} */
+const SAVE_KEY_ERRORS = {
+  unauthorized: 'The key was not saved. This window is not allowed to store it.',
+  'invalid-key': 'The key was not saved. Enter a key and try again.',
+  'encryption-unavailable': 'The key was not saved. OS encryption is unavailable, so the key would not be protected.',
+  'write-failed': 'The key was not saved. It could not be written to disk.',
+};
+
+/** @type {Record<string, string>} */
+const CLEAR_KEY_ERRORS = {
+  unauthorized: 'The key was not cleared. This window is not allowed to remove it.',
+  'unlink-failed': 'The key was not cleared. The saved file could not be removed.',
+};
+
+/**
+ * @param {string} code
+ * @param {Record<string, string>} table
+ * @param {string} fallback
+ */
+function apiKeyErrorMessage(code, table, fallback) {
+  return (code && table[code]) || fallback;
+}
+
+/**
+ * @param {string} [message]
+ * @param {boolean} [isError]
+ */
+function refreshApiKeyStatus(message, isError = false) {
   const status = document.getElementById('api-key-status');
   if (!status) return;
   status.textContent = message || (openRouterApiKey ? 'A key is saved on this device.' : 'No key saved yet.');
+  status.classList.toggle('is-error', Boolean(isError) && Boolean(message));
+}
+
+/** @param {HTMLInputElement | null} input @param {string} message */
+function showApiKeyError(input, message) {
+  refreshApiKeyStatus(message, true);
+  if (input) {
+    input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-errormessage', 'api-key-status');
+    input.focus();
+  }
+  showNotification(message, 'danger');
 }
 
 function openSettings() {
   const modal = document.getElementById('settings-modal');
+  const input = document.getElementById('api-key-input');
+  if (input) input.removeAttribute('aria-invalid');
   refreshApiKeyStatus();
   if (modal instanceof HTMLElement) openModal(modal, '#api-key-input');
 }
@@ -1588,29 +1693,63 @@ if (settingsCancelBtn) settingsCancelBtn.addEventListener('click', closeSettings
 const settingsSaveBtn = document.getElementById('settings-save-btn');
 if (settingsSaveBtn) {
   settingsSaveBtn.addEventListener('click', async () => {
-    const input = /** @type {HTMLInputElement} */ (document.getElementById('api-key-input'));
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('api-key-input'));
     const key = input ? input.value.trim() : '';
     if (!key) {
-      refreshApiKeyStatus('Enter a key before saving.');
-      if (input) input.focus();
+      showApiKeyError(input, 'Enter a key before saving.');
       return;
     }
-    await ipcRenderer.invoke('save-api-key', key);
-    openRouterApiKey = key;
-    closeSettings();
-    showNotification('API key saved');
+    settingsSaveBtn.disabled = true;
+    try {
+      const ack = readIpcAck(await ipcRenderer.invoke('save-api-key', key));
+      if (!ack.ok) {
+        showApiKeyError(input, apiKeyErrorMessage(ack.error, SAVE_KEY_ERRORS, 'The key was not saved.'));
+        return;
+      }
+      openRouterApiKey = key;
+      if (input) {
+        input.value = '';
+        input.removeAttribute('aria-invalid');
+      }
+      const savedWithoutEncryption = ack.encrypted === false;
+      const message = savedWithoutEncryption
+        ? 'API key saved without OS encryption.'
+        : 'API key saved.';
+      refreshApiKeyStatus(message);
+      closeSettings();
+      showNotification(message, savedWithoutEncryption ? 'warn' : 'ok');
+    } catch {
+      showApiKeyError(input, 'The key was not saved. The app could not finish storing it.');
+    } finally {
+      settingsSaveBtn.disabled = false;
+    }
   });
 }
 
 const settingsClearBtn = document.getElementById('settings-clear-btn');
 if (settingsClearBtn) {
   settingsClearBtn.addEventListener('click', async () => {
-    await ipcRenderer.invoke('clear-api-key');
-    openRouterApiKey = '';
-    const input = /** @type {HTMLInputElement} */ (document.getElementById('api-key-input'));
-    if (input) input.value = '';
-    closeSettings();
-    showNotification('API key cleared');
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('api-key-input'));
+    settingsClearBtn.disabled = true;
+    try {
+      const ack = readIpcAck(await ipcRenderer.invoke('clear-api-key'));
+      if (!ack.ok) {
+        showApiKeyError(input, apiKeyErrorMessage(ack.error, CLEAR_KEY_ERRORS, 'The key was not cleared.'));
+        return;
+      }
+      openRouterApiKey = '';
+      if (input) {
+        input.value = '';
+        input.removeAttribute('aria-invalid');
+      }
+      refreshApiKeyStatus('API key cleared.');
+      closeSettings();
+      showNotification('API key cleared.');
+    } catch {
+      showApiKeyError(input, 'The key was not cleared. The app could not finish removing it.');
+    } finally {
+      settingsClearBtn.disabled = false;
+    }
   });
 }
 

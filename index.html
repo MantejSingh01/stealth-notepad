@@ -2,6 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <!--
+    style-src 'unsafe-inline' is required: the page uses a <style> block, style attributes, and element.style.
+    script-src stays 'self' — listeners are registered in renderer.js, with no inline handlers.
+    connect-src is the OpenRouter API, the default room server, and a loopback room server.
+  -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; img-src 'self' data:; connect-src https://openrouter.ai https://stealthnotepad-production.up.railway.app wss://stealthnotepad-production.up.railway.app http://127.0.0.1:* ws://127.0.0.1:* http://localhost:* ws://localhost:*; font-src 'none'; media-src 'none'; object-src 'none'; frame-src 'none'; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Stealth Notepad</title>
   <style>
     /* Dark glass aesthetic */
@@ -416,6 +422,7 @@
     .save-status { font-size: 11px; color: rgba(255,255,255,0.72); }
     .ai-entry.user .ai-text { color: rgba(255,255,255,0.92); }
     .transcript-entry.error .ts-text { color: #fecaca; }
+    #api-key-status.is-error { color: #fecaca; }
   </style>
 </head>
 <body>
@@ -614,7 +621,7 @@
       <div id="settings-heading" style="font-size:13px;color:rgba(255,255,255,0.9);font-weight:600;text-align:center;">&#9881; Settings</div>
       <div style="display:flex;flex-direction:column;gap:4px;">
         <label for="api-key-input" style="font-size:11px;color:rgba(255,255,255,0.78);text-transform:uppercase;letter-spacing:0.05em;">OpenRouter API Key</label>
-        <input id="api-key-input" type="password" placeholder="sk-or-v1-..." autocomplete="off"
+        <input id="api-key-input" type="password" placeholder="sk-or-v1-..." autocomplete="off" aria-describedby="api-key-status"
           style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:6px 10px;color:#fff;font-size:12px;font-family:inherit;" />
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;">
