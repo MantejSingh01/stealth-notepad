@@ -7,6 +7,7 @@ import { io } from 'socket.io-client';
 import { readAppFile } from './helpers/boot-main.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ROOM_SECRET = 'test-room-secret';
 const sockets = new Set();
 let child;
 let baseUrl;
@@ -23,7 +24,11 @@ function freePort() {
 }
 
 function connect() {
-  const socket = io(baseUrl, { forceNew: true, timeout: 4000 });
+  const socket = io(baseUrl, {
+    forceNew: true,
+    timeout: 4000,
+    auth: { token: ROOM_SECRET },
+  });
   sockets.add(socket);
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('connect timeout')), 4000);
@@ -68,7 +73,12 @@ beforeAll(async () => {
   const port = await freePort();
   baseUrl = `http://127.0.0.1:${port}`;
   child = spawn(process.execPath, [path.join(root, 'server.js')], {
-    env: { ...process.env, PORT: String(port), HOST: '127.0.0.1' },
+    env: {
+      ...process.env,
+      PORT: String(port),
+      HOST: '127.0.0.1',
+      COLLAB_SHARED_SECRET: ROOM_SECRET,
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   await new Promise((resolve, reject) => {
@@ -174,22 +184,48 @@ test('room ids are 6-character codes from crypto bytes', async () => {
   expect(makeId).not.toMatch(/Math\.random/);
 });
 
-test.fails('[known bug] the collab server rejects a client with no credential', async () => {
-  const socket = io(baseUrl, { forceNew: true, timeout: 2000, auth: {} });
-  sockets.add(socket);
-  const outcome = await new Promise((resolve) => {
+test('the collab server rejects a client with no credential', async () => {
+  async function attempt(auth) {
+    const socket = io(baseUrl, { forceNew: true, timeout: 2000, auth });
+    sockets.add(socket);
+    const outcome = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve('timeout'), 2000);
+      socket.on('connect', () => {
+        clearTimeout(timer);
+        resolve('connected');
+      });
+      socket.on('connect_error', () => {
+        clearTimeout(timer);
+        resolve('rejected');
+      });
+    });
+    socket.disconnect();
+    return outcome;
+  }
+  expect(await attempt({})).toBe('rejected');
+  expect(await attempt({ token: 'wrong-secret' })).toBe('rejected');
+  expect(await attempt({ token: ROOM_SECRET })).toBe('connected');
+
+  const fileClient = io(baseUrl, {
+    forceNew: true,
+    timeout: 2000,
+    extraHeaders: { origin: 'file://' },
+    auth: {},
+  });
+  sockets.add(fileClient);
+  const fileOutcome = await new Promise((resolve) => {
     const timer = setTimeout(() => resolve('timeout'), 2000);
-    socket.on('connect', () => {
+    fileClient.on('connect', () => {
       clearTimeout(timer);
       resolve('connected');
     });
-    socket.on('connect_error', () => {
+    fileClient.on('connect_error', () => {
       clearTimeout(timer);
       resolve('rejected');
     });
   });
-  socket.disconnect();
-  expect(outcome).toBe('rejected');
+  fileClient.disconnect();
+  expect(fileOutcome).toBe('connected');
 });
 
 test('unknown HTTP routes get a response', async () => {
@@ -215,14 +251,16 @@ test('a missing ack callback does not take down the room server', async () => {
   expect(res.status).toBe(200);
 });
 
-test.fails('[known bug] a missing Origin is not treated as allowed', () => {
+test('a missing Origin is not treated as allowed', () => {
   const body = betweenServer('function isAllowedOrigin', 'function makeId');
   expect(body).not.toMatch(/if\s*\(\s*!origin\s*\)\s*return true/);
+  expect(body).toMatch(/timingSafeEqual/);
 });
 
-test.fails('[known bug] room ids are not biased by modulo against the alphabet', () => {
+test('room ids are not biased by modulo against the alphabet', () => {
   const body = betweenServer('function makeId', 'function rateLimit');
   expect(body).not.toMatch(/%\s*ROOM_ALPHABET\.length/);
+  expect(body).toMatch(/crypto\.randomBytes/);
 });
 
 function betweenServer(start, end) {

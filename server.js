@@ -50,17 +50,52 @@ function extraOrigins() {
 }
 
 function isAllowedOrigin(origin) {
-  // Node and non-browser clients omit Origin. The Electron renderer is a
-  // file:// page, which Chromium reports as the origin "null" or file://.
-  if (!origin) return true;
-  if (origin === 'null' || origin.startsWith('file://')) return true;
+  // The Electron renderer is a file:// page, which Chromium reports as the
+  // origin "null" or file://. A missing Origin is not allowed here; the
+  // socket middleware accepts it only when the shared secret matches.
+  if (origin === 'null' || (typeof origin === 'string' && origin.startsWith('file://'))) return true;
+  if (!origin) return false;
   return extraOrigins().includes(origin);
 }
 
+function sharedSecret() {
+  const value = process.env.COLLAB_SHARED_SECRET;
+  return typeof value === 'string' ? value : '';
+}
+
+function tokensEqual(expected, supplied) {
+  const a = Buffer.from(expected, 'utf8');
+  const b = Buffer.from(typeof supplied === 'string' ? supplied : '', 'utf8');
+  if (a.length !== b.length) {
+    crypto.timingSafeEqual(a, a);
+    return false;
+  }
+  return crypto.timingSafeEqual(a, b);
+}
+
+function presentedToken(auth) {
+  if (!auth || typeof auth !== 'object') return '';
+  return typeof auth.token === 'string' ? auth.token : '';
+}
+
+function missingOriginAuthorized(auth) {
+  const expected = sharedSecret();
+  if (!expected) return false;
+  return tokensEqual(expected, presentedToken(auth));
+}
+
 function makeId() {
-  const bytes = crypto.randomBytes(6);
+  const alphabet = ROOM_ALPHABET;
+  const size = alphabet.length;
+  // Rejection sampling: discard bytes that would bias the remainder.
+  const limit = 256 - (256 % size);
   let id = '';
-  for (let i = 0; i < 6; i++) id += ROOM_ALPHABET[bytes[i] % ROOM_ALPHABET.length];
+  while (id.length < 6) {
+    const bytes = crypto.randomBytes(6);
+    for (let i = 0; i < bytes.length && id.length < 6; i++) {
+      if (bytes[i] < limit) id += alphabet[bytes[i] % size];
+    }
+  }
   return id;
 }
 
@@ -129,7 +164,9 @@ httpServer.headersTimeout = 10_000;
 const io = new Server(httpServer, {
   cors: {
     origin(origin, callback) {
-      if (isAllowedOrigin(origin)) return callback(null, true);
+      // Missing Origin is decided in the socket middleware, where the shared
+      // secret is available. A present, disallowed origin is still refused.
+      if (!origin || isAllowedOrigin(origin)) return callback(null, true);
       console.error('[room-server] rejected origin');
       return callback(null, false);
     },
@@ -137,7 +174,7 @@ const io = new Server(httpServer, {
   },
   allowRequest(req, callback) {
     const origin = req.headers && req.headers.origin;
-    if (!isAllowedOrigin(origin)) return callback('origin not allowed', false);
+    if (origin && !isAllowedOrigin(origin)) return callback('origin not allowed', false);
     return callback(null, true);
   },
   maxHttpBufferSize: 5 * 1024 * 1024,
@@ -155,6 +192,18 @@ function leaveRoom(socket, roomId) {
   }
   io.to(roomId).emit('room-members', room.size);
 }
+
+io.use((socket, next) => {
+  try {
+    const origin = socket.handshake.headers && socket.handshake.headers.origin;
+    if (isAllowedOrigin(origin)) return next();
+    if (!origin && missingOriginAuthorized(socket.handshake.auth)) return next();
+    return next(new Error('unauthorized'));
+  } catch (err) {
+    console.error('[room-server] auth failed', err && err.message);
+    return next(new Error('unauthorized'));
+  }
+});
 
 io.on('connection', (socket) => {
   const state = { room: null };
