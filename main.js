@@ -15,8 +15,9 @@ let hotkeysRegistered = false;
 let escapeRegistered = false;
 let loggedProtection = false;
 
-const OPACITY_LEVELS = [0.3, 0.5, 0.7, 1.0];
-let opacityIndex = 3;
+// setOpacity multiplies every pixel, including the text. 30% and 50% are not readable.
+const OPACITY_LEVELS = [0.8, 0.9, 1.0];
+let opacityIndex = OPACITY_LEVELS.length - 1;
 
 const WIN_BAR     = { width: 400,  height: 52  }; // collapsed bar
 const WIN_BASE    = { width: 440,  height: 600 }; // AI panel only
@@ -38,9 +39,67 @@ const SENSITIVE_ENV = ['OPEN_ROUTER_KEY', 'OPENROUTER_API_KEY', 'OPENAI_API_KEY'
 
 const KEY_FILE = path.join(app.getPath('userData'), 'api-key.enc');
 const INDEX_FILE = path.normalize(path.join(__dirname, 'index.html'));
+const ASAR_SEGMENT = `${path.sep}app.asar${path.sep}`;
+const ASAR_UNPACKED_SEGMENT = `${path.sep}app.asar.unpacked${path.sep}`;
 
 function log(...args) {
   console.error('[stealth-notepad]', ...args);
+}
+
+/**
+ * nodejs-whisper is not called from this process. The renderer requires it and
+ * the library chdirs into cpp/whisper.cpp and runs make. That path is not a
+ * real directory inside an asar package. This reports the failure without
+ * attempting the build.
+ */
+function whisperRuntimeStatus() {
+  let entry = '';
+  try {
+    entry = require.resolve('nodejs-whisper');
+  } catch (_) {
+    return {
+      ok: false,
+      code: 'not-installed',
+      root: null,
+      error: 'nodejs-whisper is not installed. Transcription is unavailable.',
+    };
+  }
+
+  const root = path.resolve(path.dirname(entry), '..');
+  const packagedRoot = root.includes(ASAR_SEGMENT)
+    ? root.replace(ASAR_SEGMENT, ASAR_UNPACKED_SEGMENT)
+    : null;
+  const usableRoot = packagedRoot || root;
+  const cppDir = path.join(usableRoot, 'cpp', 'whisper.cpp');
+  let cppReady = false;
+  try {
+    cppReady = fs.statSync(cppDir).isDirectory();
+  } catch (_) {
+    cppReady = false;
+  }
+
+  if (packagedRoot && !cppReady) {
+    return {
+      ok: false,
+      code: 'packed-in-asar',
+      root: null,
+      error: 'Transcription is unavailable in this packaged build. nodejs-whisper changes into cpp/whisper.cpp and runs make, which cannot run from inside the app archive. Unpack node_modules/nodejs-whisper with electron-builder asarUnpack and load that copy from app.asar.unpacked.',
+    };
+  }
+  if (!cppReady) {
+    return {
+      ok: false,
+      code: 'missing-sources',
+      root: null,
+      error: 'nodejs-whisper is installed but cpp/whisper.cpp is missing. Transcription is unavailable.',
+    };
+  }
+  return {
+    ok: true,
+    code: packagedRoot ? 'unpacked' : 'ready',
+    root: usableRoot,
+    error: null,
+  };
 }
 
 process.on('uncaughtException', (err) => {
@@ -260,6 +319,9 @@ function registerHotkeys() {
   if (hotkeysRegistered) return;
   hotkeysRegistered = true;
 
+  // Show/hide. Ctrl/Cmd+Shift+N is the historical binding and conflicts with
+  // browser private windows. Ctrl/Cmd+Alt+N does not, and is the one to use.
+  registerShortcut('CommandOrControl+Alt+N', () => toggleWindow());
   registerShortcut('CommandOrControl+Shift+N', () => toggleWindow());
 
   registerShortcut('CommandOrControl+Shift+C', () => {
@@ -565,6 +627,11 @@ ipcMain.handle('load-api-key', (event) => {
   }
 });
 
+ipcMain.handle('get-whisper-status', (event) => {
+  if (!fromMainWindow(event)) return { ok: false, code: 'unauthorized', root: null, error: 'unauthorized' };
+  return whisperRuntimeStatus();
+});
+
 ipcMain.handle('clear-api-key', (event) => {
   if (!fromMainWindow(event)) return { ok: false, error: 'unauthorized' };
   try {
@@ -602,6 +669,8 @@ app.on('child-process-gone', (_event, details) => {
 app.whenReady().then(() => {
   installSessionGuards();
   logNativeHelper();
+  const whisperStatus = whisperRuntimeStatus();
+  if (!whisperStatus.ok) log(whisperStatus.error);
   if (app.dock) app.dock.hide(); // macOS: remove from Dock + Cmd+Tab switcher
   createWindow();
 }).catch((err) => {
