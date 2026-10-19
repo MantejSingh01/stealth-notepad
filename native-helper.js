@@ -1,35 +1,28 @@
-// native-helper.js
-// Optional: Advanced Windows-specific stealth mode
-// This requires node-gyp and C++ build tools to compile
+'use strict';
 
-// For now, this is a placeholder. To implement full Windows stealth:
-// You would need to use Windows API calls to set WS_EX_NOREDIRECTIONBITMAP
-// and WDA_EXCLUDEFROMCAPTURE flags
+/**
+ * Optional native capture-exclusion addon.
+ *
+ * There is no compiled addon in this repo. Electron already performs the
+ * platform call from BrowserWindow.setContentProtection:
+ *   - Windows: SetWindowDisplayAffinity(WDA_EXCLUDEFROMCAPTURE), which older
+ *     Windows builds honor as WDA_MONITOR (the capture shows a black window).
+ *   - macOS: NSWindow.sharingType = NSWindowSharingNone.
+ *   - Linux: not implemented by Electron.
+ *
+ * `setWindowExStyle` stays null so older callers cannot mistake a missing
+ * addon for a successful native call.
+ */
 
-// Simplified version without native bindings:
-module.exports = {
-  setWindowExStyle: null // Will be implemented with native bindings if needed
-};
-
-// FULL IMPLEMENTATION WOULD REQUIRE:
-// 1. Install: npm install node-gyp windows-build-tools
-// 2. Create binding.gyp file
-// 3. Write C++ addon to call SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE)
-//
-// For educational purposes, here's the concept:
-/*
-#include <windows.h>
-#include <node.h>
-
-void SetWindowExStyle(const v8::FunctionCallbackInfo<v8::Value>& args) {
-  HWND hwnd = (HWND)args[0]->IntegerValue();
-  
-  // Exclude from screen capture
-  SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
-  
-  // Additional stealth flags
-  LONG_PTR exStyle = GetWindowLongPtr(hwnd, GWL_EXSTYLE);
-  exStyle |= WS_EX_NOREDIRECTIONBITMAP | WS_EX_LAYERED;
-  SetWindowLongPtr(hwnd, GWL_EXSTYLE, exStyle);
+function applyWindowDisplayAffinity() {
+  return {
+    ok: false,
+    available: false,
+    reason: 'native-addon-not-built',
+  };
 }
-*/
+
+module.exports = {
+  applyWindowDisplayAffinity,
+  setWindowExStyle: null,
+};
