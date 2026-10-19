@@ -9,12 +9,18 @@ let openRouterApiKey = process.env.OPEN_ROUTER_KEY || '';
 
 ipcRenderer.invoke('load-api-key').then((key) => {
   if (key) openRouterApiKey = key;
+  refreshApiKeyStatus();
 }).catch(() => {});
 
 // ── Click-through: pass mouse events to apps beneath when not over UI ─────────
 document.addEventListener('mousemove', (e) => {
   const el = document.elementFromPoint(e.clientX, e.clientY);
-  const interactive = el && el.closest('button, input, textarea, select, a, [data-interactive]');
+  // The window is sized to the chrome. Feeds, headers, and dialogs must stay
+  // clickable so text can be selected and scrolled. Pass-through is only for
+  // the transparent gap outside those regions.
+  const interactive = el && el.closest(
+    '#bar-mode, #panel-mode, #notepad-overlay, #screenshot-modal, #session-modal, #settings-modal'
+  );
   ipcRenderer.send('set-ignore-mouse', !interactive);
 });
 
@@ -37,43 +43,225 @@ document.addEventListener('mousemove', (e) => {
   /** @type {ReturnType<typeof setTimeout> | null} */
   let showTimer = null;
 
+  /** @param {HTMLElement} host @param {string} source */
+  function fillTooltip(host, source) {
+    host.replaceChildren();
+    const lines = source.split(/<br\s*\/?>/i);
+    lines.forEach((line, index) => {
+      if (index) host.appendChild(document.createElement('br'));
+      const re = /<kbd>(.*?)<\/kbd>/gi;
+      let last = 0;
+      let match;
+      while ((match = re.exec(line))) {
+        host.appendChild(document.createTextNode(line.slice(last, match.index)));
+        const kbd = document.createElement('kbd');
+        kbd.textContent = match[1];
+        host.appendChild(kbd);
+        last = match.index + match[0].length;
+      }
+      host.appendChild(document.createTextNode(line.slice(last)));
+    });
+  }
+
+  /** @param {Element} el */
+  function placeTooltip(el) {
+    const text = /** @type {HTMLElement} */ (el).dataset.tip || '';
+    fillTooltip(tip, text);
+    tip.style.display = 'block';
+    const rect = el.getBoundingClientRect();
+    const tipW = tip.offsetWidth;
+    const tipH = tip.offsetHeight;
+    const inBar = el.closest('#bar-mode');
+    let left, top;
+    if (inBar) {
+      left = Math.max(8, rect.left - tipW - 8);
+      top = rect.top + rect.height / 2 - tipH / 2;
+    } else {
+      left = rect.left + rect.width / 2 - tipW / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8));
+      top = rect.top > 60 ? rect.top - tipH - 8 : rect.bottom + 8;
+    }
+    tip.style.left = `${left}px`;
+    tip.style.top = `${top}px`;
+  }
+
+  /** @param {Element} el */
+  function scheduleTooltip(el) {
+    if (showTimer) clearTimeout(showTimer);
+    showTimer = setTimeout(() => placeTooltip(el), 120);
+  }
+
+  function hideTooltip() {
+    if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+    tip.style.display = 'none';
+  }
+
   document.addEventListener('mouseover', (e) => {
     const target = /** @type {HTMLElement | null} */ (e.target);
     const el = target ? target.closest('[data-tip]') : null;
-    if (!el) return;
-    if (showTimer) clearTimeout(showTimer);
-    showTimer = setTimeout(() => {
-      const text = /** @type {HTMLElement} */ (el).dataset.tip || '';
-      tip.innerHTML = text;
-      tip.style.display = 'block';
-      const rect = el.getBoundingClientRect();
-      const tipW = tip.offsetWidth;
-      const tipH = tip.offsetHeight;
-      const inBar = /** @type {HTMLElement} */ (el).closest('#bar-mode');
-      let left, top;
-      if (inBar) {
-        // Show to the left of the button, vertically centred on it
-        left = rect.left - tipW - 8;
-        left = Math.max(8, left);
-        top = rect.top + rect.height / 2 - tipH / 2;
-      } else {
-        left = rect.left + rect.width / 2 - tipW / 2;
-        left = Math.max(8, Math.min(left, window.innerWidth - tipW - 8));
-        top = rect.top > 60 ? rect.top - tipH - 8 : rect.bottom + 8;
-      }
-      tip.style.left = `${left}px`;
-      tip.style.top = `${top}px`;
-    }, 120);
+    if (el) scheduleTooltip(el);
   });
 
   document.addEventListener('mouseout', (e) => {
     const target = /** @type {HTMLElement | null} */ (e.target);
-    if (target && target.closest('[data-tip]')) {
-      if (showTimer) { clearTimeout(showTimer); showTimer = null; }
-      tip.style.display = 'none';
-    }
+    const el = target ? target.closest('[data-tip]') : null;
+    if (!el) return;
+    if (el.contains(document.activeElement)) return;
+    hideTooltip();
+  });
+
+  document.addEventListener('focusin', (e) => {
+    const target = /** @type {HTMLElement | null} */ (e.target);
+    const el = target ? target.closest('[data-tip]') : null;
+    if (el) scheduleTooltip(el);
+  });
+
+  document.addEventListener('focusout', (e) => {
+    const target = /** @type {HTMLElement | null} */ (e.target);
+    if (target && target.closest('[data-tip]')) hideTooltip();
   });
 })();
+
+// ── UI helpers (dialogs, announcements, stealth copy) ────────────────────────
+const stealthCaptureSupported = process.platform === 'darwin' || process.platform === 'win32';
+let barPreviewText = stealthCaptureSupported
+  ? 'Stealth on — hidden from screen share'
+  : 'Capture blocking is not available on this system';
+
+/** @param {string} message */
+function announce(message) {
+  const live = document.getElementById('live-status');
+  if (!live || !message) return;
+  // Clearing first lets a repeated message be announced again. The timeout
+  // covers a hidden window, where requestAnimationFrame may not run.
+  const token = (announce.token = (announce.token || 0) + 1);
+  live.textContent = '';
+  const write = () => {
+    if (announce.token !== token || live.textContent === message) return;
+    live.textContent = message;
+  };
+  requestAnimationFrame(write);
+  setTimeout(write, 60);
+}
+
+/** @param {string} [text] */
+function updateBarPreview(text) {
+  if (typeof text === 'string' && text.trim()) {
+    barPreviewText = text.replace(/\s+/g, ' ').trim().slice(0, 160);
+  }
+  const el = document.getElementById('bar-preview');
+  if (!el) return;
+  if (!stealthCaptureSupported) {
+    const isDefault = barPreviewText === 'Capture blocking is not available on this system';
+    el.textContent = isDefault ? barPreviewText : `Not capture-protected · ${barPreviewText}`;
+    return;
+  }
+  el.textContent = stealthOn ? barPreviewText : `VISIBLE · ${barPreviewText}`;
+}
+
+/** @type {HTMLElement | null} */
+let modalReturnFocus = null;
+/** @type {((e: KeyboardEvent) => void) | null} */
+let focusTrapHandler = null;
+
+function anyDialogOpen() {
+  return ['notepad-overlay', 'screenshot-modal', 'session-modal', 'settings-modal'].some((id) => {
+    const el = document.getElementById(id);
+    return el instanceof HTMLElement && el.style.display === 'flex';
+  });
+}
+
+/** @param {boolean} on */
+function setBackgroundInert(on) {
+  ['bar-mode', 'panel-mode'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (el instanceof HTMLElement) el.inert = on;
+  });
+}
+
+function releaseFocusTrap() {
+  if (focusTrapHandler) document.removeEventListener('keydown', focusTrapHandler);
+  focusTrapHandler = null;
+}
+
+/** @param {HTMLElement} modal */
+function trapFocus(modal) {
+  releaseFocusTrap();
+  focusTrapHandler = (e) => {
+    if (e.key !== 'Tab' || modal.style.display === 'none') return;
+    const nodes = Array.from(modal.querySelectorAll('button, input, select, textarea, a[href]'))
+      .filter((node) => node instanceof HTMLElement && !node.hasAttribute('disabled') && node.getClientRects().length > 0);
+    if (!nodes.length) return;
+    const first = /** @type {HTMLElement} */ (nodes[0]);
+    const last = /** @type {HTMLElement} */ (nodes[nodes.length - 1]);
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+  document.addEventListener('keydown', focusTrapHandler);
+}
+
+/**
+ * @param {HTMLElement} modal
+ * @param {string} [focusSelector]
+ */
+function openModal(modal, focusSelector) {
+  modalReturnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  modal.style.display = 'flex';
+  modal.setAttribute('aria-hidden', 'false');
+  setBackgroundInert(true);
+  const preferred = focusSelector ? modal.querySelector(focusSelector) : null;
+  const focusEl = preferred instanceof HTMLElement
+    ? preferred
+    : modal.querySelector('input, select, textarea, button');
+  if (focusEl instanceof HTMLElement) {
+    try {
+      focusEl.focus({ focusVisible: true });
+    } catch {
+      focusEl.focus();
+    }
+  }
+  trapFocus(modal);
+}
+
+function topOpenDialog() {
+  const ids = ['settings-modal', 'session-modal', 'screenshot-modal', 'notepad-overlay'];
+  for (const id of ids) {
+    const el = document.getElementById(id);
+    if (el instanceof HTMLElement && el.style.display === 'flex') return el;
+  }
+  return null;
+}
+
+/** @param {HTMLElement} modal */
+function closeModal(modal) {
+  modal.style.display = 'none';
+  modal.setAttribute('aria-hidden', 'true');
+  releaseFocusTrap();
+  const next = topOpenDialog();
+  if (next) {
+    setBackgroundInert(true);
+    trapFocus(next);
+    const focusEl = next.querySelector('input, select, textarea, button');
+    if (focusEl instanceof HTMLElement) {
+      try { focusEl.focus({ focusVisible: true }); }
+      catch { focusEl.focus(); }
+    }
+    return;
+  }
+  setBackgroundInert(false);
+  if (modalReturnFocus && document.contains(modalReturnFocus)) modalReturnFocus.focus();
+  modalReturnFocus = null;
+}
+
+function dropEmptyHint(id) {
+  const hint = document.getElementById(id);
+  if (hint) hint.remove();
+}
 
 // ── DOM refs ──────────────────────────────────────────────────────────────────
 const notepad         = /** @type {HTMLTextAreaElement} */ (document.getElementById('notepad'));
@@ -148,6 +336,16 @@ function connectSocket() {
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('notepad-content');
   if (saved) notepad.value = saved;
+  const saveStatus = document.getElementById('notepad-save-status');
+  if (saveStatus) saveStatus.textContent = saved ? 'Saved on this device' : 'Notes save on this device';
+
+  if (process.platform === 'darwin') {
+    document.querySelectorAll('[data-tip]').forEach((el) => {
+      if (el instanceof HTMLElement && el.dataset.tip) {
+        el.dataset.tip = el.dataset.tip.replaceAll('Ctrl+', '⌘');
+      }
+    });
+  }
 
   // Prevent double-click on drag regions from maximizing/zooming the window
   document.querySelectorAll('.panel-header, #bar-mode').forEach((el) => {
@@ -155,8 +353,16 @@ window.addEventListener('DOMContentLoaded', () => {
   });
 });
 
+/** @type {ReturnType<typeof setTimeout> | null} */
+let notepadSaveTimer = null;
 notepad.addEventListener('input', () => {
   localStorage.setItem('notepad-content', notepad.value);
+  const saveStatus = document.getElementById('notepad-save-status');
+  if (saveStatus) saveStatus.textContent = 'Saving…';
+  if (notepadSaveTimer) clearTimeout(notepadSaveTimer);
+  notepadSaveTimer = setTimeout(() => {
+    if (saveStatus) saveStatus.textContent = 'Saved on this device';
+  }, 250);
 });
 
 // ── Window controls ───────────────────────────────────────────────────────────
@@ -167,19 +373,50 @@ const stealthToggleBtn = document.getElementById('stealth-toggle-btn');
 let stealthOn = true;
 
 function applyStealthButtonState() {
-  if (!stealthToggleBtn) return;
-  if (stealthOn) {
-    stealthToggleBtn.textContent = '🔒';
-    stealthToggleBtn.style.color = 'rgba(74,222,128,0.8)';
-    stealthToggleBtn.style.borderColor = 'rgba(74,222,128,0.2)';
-    stealthToggleBtn.title = 'Stealth ON — hidden from screen share';
-  } else {
-    stealthToggleBtn.textContent = '🔓';
-    stealthToggleBtn.style.color = 'rgba(239,68,68,0.8)';
-    stealthToggleBtn.style.borderColor = 'rgba(239,68,68,0.2)';
-    stealthToggleBtn.title = 'Stealth OFF — visible in screen share';
+  const unsupported = !stealthCaptureSupported;
+  document.body.classList.toggle('stealth-off', stealthCaptureSupported && !stealthOn);
+  document.body.classList.toggle('stealth-unsupported', unsupported);
+
+  const badges = [
+    document.getElementById('stealth-badge'),
+    document.getElementById('bar-stealth-badge'),
+  ];
+  const badgeCopy = unsupported
+    ? ['Not protected', 'Not protected']
+    : ['On screen', 'On screen'];
+  badges.forEach((badge, index) => {
+    if (!(badge instanceof HTMLElement)) return;
+    badge.hidden = stealthCaptureSupported && stealthOn;
+    badge.textContent = badgeCopy[index];
+  });
+
+  const barIcon = document.getElementById('bar-click-area');
+  if (barIcon) {
+    barIcon.textContent = stealthOn && !unsupported ? '🔒' : '🔓';
+    barIcon.setAttribute('aria-label', unsupported
+      ? 'Screen-capture blocking is not available on this system'
+      : (stealthOn ? 'Stealth on' : 'Stealth off, visible in screen share'));
   }
+
+  if (!stealthToggleBtn) {
+    updateBarPreview();
+    return;
+  }
+  const protectedOn = stealthOn && !unsupported;
+  stealthToggleBtn.textContent = protectedOn ? '🔒' : '🔓';
+  stealthToggleBtn.style.color = protectedOn ? 'rgba(74,222,128,0.95)' : 'rgba(254,202,202,0.98)';
+  stealthToggleBtn.style.borderColor = protectedOn ? 'rgba(74,222,128,0.45)' : 'rgba(248,113,113,0.75)';
+  const label = unsupported
+    ? 'Screen-capture blocking is not available on Linux. This control does not hide the window from screen share.'
+    : (stealthOn
+      ? 'Stealth on, hidden from screen share. Activate to show this window in screen share.'
+      : 'Stealth off. This window can appear in screen share. Activate to hide it again.');
+  stealthToggleBtn.title = label;
+  stealthToggleBtn.setAttribute('aria-label', label);
+  stealthToggleBtn.setAttribute('aria-pressed', stealthOn ? 'true' : 'false');
+  updateBarPreview();
 }
+applyStealthButtonState();
 
 if (stealthToggleBtn) {
   stealthToggleBtn.addEventListener('click', () => {
@@ -190,19 +427,36 @@ if (stealthToggleBtn) {
 ipcRenderer.on('stealth-changed', (_, enabled) => {
   stealthOn = enabled;
   applyStealthButtonState();
-  showNotification(enabled ? 'Stealth ON — hidden from capture' : 'Stealth OFF — visible in capture');
+  if (!stealthCaptureSupported) {
+    showNotification('Screen-capture blocking is not available on Linux', 'danger');
+    return;
+  }
+  showNotification(
+    enabled ? 'Stealth on — hidden from screen capture' : 'Stealth off — this window can appear in screen capture',
+    enabled ? 'ok' : 'danger'
+  );
 });
 
 // ── IPC from main ─────────────────────────────────────────────────────────────
 ipcRenderer.on('clear-text', () => {
   notepad.value = '';
   localStorage.removeItem('notepad-content');
-  showNotification('Text cleared');
+  const saveStatus = document.getElementById('notepad-save-status');
+  if (saveStatus) saveStatus.textContent = 'Notes cleared';
+  showNotification('Notes cleared');
 });
 
 ipcRenderer.on('opacity-changed', (_, opacity) => {
   const el = document.getElementById('opacity-display');
-  if (el) el.textContent = `${Math.round(opacity * 100)}%`;
+  if (!el) return;
+  const pct = Math.round(Number(opacity) * 100);
+  el.textContent = `${pct}%`;
+  el.classList.toggle('opacity-low', Number(opacity) < 0.7);
+  const hint = Number(opacity) < 1
+    ? `Window opacity ${pct} percent. The whole window is dimmed, including text.`
+    : 'Window opacity 100 percent.';
+  el.title = hint;
+  if (Number(opacity) <= 0.5) announce(hint);
 });
 
 ipcRenderer.on('save-to-clipboard', () => {
@@ -231,7 +485,10 @@ function onJoinedRoom(roomId) {
   const display = document.getElementById('room-id-display');
   const status  = document.getElementById('room-status');
   if (display) display.textContent = roomId;
-  if (status)  status.style.background = '#4ade80';
+  if (status) {
+    status.style.background = '#4ade80';
+    status.setAttribute('aria-label', `In room ${roomId}`);
+  }
   updateCompanionStatus(roomId);
 }
 
@@ -240,7 +497,10 @@ function onLeftRoom() {
   const display = document.getElementById('room-id-display');
   const status  = document.getElementById('room-status');
   if (display) display.textContent = '—';
-  if (status)  status.style.background = '#ef4444';
+  if (status) {
+    status.style.background = '#ef4444';
+    status.setAttribute('aria-label', 'Not in a room');
+  }
   updateCompanionStatus(null);
 }
 
@@ -250,8 +510,9 @@ if (createRoomBtn) {
     connectSocket();
     if (!socket) return;
     socket.emit('create-room', (/** @type {{ ok: boolean, roomId: string }} */ res) => {
-      if (!res.ok) return;
+      if (!res.ok) { showNotification('Could not create a room', 'warn'); return; }
       onJoinedRoom(res.roomId);
+      showNotification(`Room ${res.roomId} created`);
     });
   });
 }
@@ -261,13 +522,31 @@ if (joinRoomBtn) {
   joinRoomBtn.addEventListener('click', () => {
     const input = /** @type {HTMLInputElement} */ (document.getElementById('join-input'));
     const id = input ? input.value.trim().toUpperCase() : '';
-    if (!id) return;
+    if (!id) { showNotification('Enter a room ID to join', 'warn'); return; }
     connectSocket();
     if (!socket) return;
     socket.emit('join-room', id, (/** @type {{ ok: boolean, error?: string }} */ res) => {
       if (!res.ok) { showNotification(`Room not found: ${id}`); return; }
       onJoinedRoom(id);
     });
+  });
+}
+
+const roomIdDisplay = document.getElementById('room-id-display');
+if (roomIdDisplay) {
+  roomIdDisplay.title = 'Copy room ID';
+  roomIdDisplay.style.cursor = 'pointer';
+  roomIdDisplay.setAttribute('role', 'button');
+  roomIdDisplay.tabIndex = 0;
+  const copyRoomId = () => {
+    const id = (roomIdDisplay.textContent || '').split(' ')[0];
+    if (!id || id === '—') return;
+    clipboard.writeText(id);
+    showNotification('Room ID copied');
+  };
+  roomIdDisplay.addEventListener('click', copyRoomId);
+  roomIdDisplay.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copyRoomId(); }
   });
 }
 
@@ -328,32 +607,38 @@ document.querySelectorAll('[data-bar-expand], #bar-click-area').forEach((el) => 
 const collapseToBarBtn = document.getElementById('collapse-to-bar-btn');
 if (collapseToBarBtn) collapseToBarBtn.addEventListener('click', () => enterBarMode());
 
-const notepadTabBtn = document.getElementById('notepad-tab-btn');
-if (notepadTabBtn) {
-  notepadTabBtn.addEventListener('click', () => {
-    const overlay = document.getElementById('notepad-overlay');
-    if (overlay) overlay.style.display = 'flex';
-  });
+function openNotepad() {
+  const overlay = document.getElementById('notepad-overlay');
+  if (overlay instanceof HTMLElement) openModal(overlay, '#notepad');
 }
 
-const notepadCloseBtn = document.getElementById('notepad-close-btn');
-if (notepadCloseBtn) {
-  notepadCloseBtn.addEventListener('click', () => {
-    const overlay = document.getElementById('notepad-overlay');
-    if (overlay) overlay.style.display = 'none';
-  });
+function closeNotepad() {
+  const overlay = document.getElementById('notepad-overlay');
+  if (overlay instanceof HTMLElement) closeModal(overlay);
 }
+
+const notepadTabBtn = document.getElementById('notepad-tab-btn');
+if (notepadTabBtn) notepadTabBtn.addEventListener('click', openNotepad);
+
+const notepadCloseBtn = document.getElementById('notepad-close-btn');
+if (notepadCloseBtn) notepadCloseBtn.addEventListener('click', closeNotepad);
 
 const screenshotCloseBtn = document.getElementById('screenshot-close-btn');
 if (screenshotCloseBtn) {
   screenshotCloseBtn.addEventListener('click', () => {
     const modal = document.getElementById('screenshot-modal');
-    if (modal) modal.style.display = 'none';
+    if (modal instanceof HTMLElement) closeModal(modal);
   });
 }
 
 const screenshotAnalyzeBtn = document.getElementById('screenshot-analyze-btn');
-if (screenshotAnalyzeBtn) screenshotAnalyzeBtn.addEventListener('click', () => analyzeScreen());
+if (screenshotAnalyzeBtn) {
+  screenshotAnalyzeBtn.addEventListener('click', () => {
+    const modal = document.getElementById('screenshot-modal');
+    if (modal instanceof HTMLElement) closeModal(modal);
+    analyzeScreen();
+  });
+}
 
 /** @param {string | null} roomId */
 function updateCompanionStatus(roomId) {
@@ -393,11 +678,11 @@ async function captureAndShare() {
     const imageData = await ipcRenderer.invoke('capture-screenshot');
     if (!imageData) return;
     showScreenshot(imageData);
-    appendTranscript('[Screenshot captured & shared]', 'local');
+    appendTranscript(inRoom ? 'Screenshot captured and shared' : 'Screenshot captured', 'local');
     if (socket && inRoom) socket.emit('screenshot-share', { imageData, senderId: socket.id });
   } catch (err) {
     const e = /** @type {Error} */ (err);
-    appendTranscript(`Screenshot error: ${e.message}`, 'local');
+    appendTranscript(`Screenshot error: ${e.message}`, 'local', true);
   }
 }
 
@@ -410,6 +695,9 @@ function showScreenshot(dataUrl) {
   }
   if (screenshotPH) screenshotPH.style.display = 'none';
   showRoomScreenshot(dataUrl);
+  enterPanelMode();
+  const modal = document.getElementById('screenshot-modal');
+  if (modal instanceof HTMLElement) openModal(modal, '#screenshot-close-btn');
 }
 
 if (captureBtn) captureBtn.addEventListener('click', () => captureAndShare());
@@ -437,7 +725,42 @@ function recordChunk(stream) {
   }, CHUNK_MS);
 }
 
+let whisperBlocked = false;
+
+/**
+ * Ask main whether nodejs-whisper can run. PR #3 returns
+ * { ok, code, root, error } and { ok:false, code:'packed-in-asar' } for packaged builds.
+ * A missing handler (main without that IPC) resolves as "try anyway".
+ * @returns {Promise<boolean>}
+ */
+async function transcriptionRuntimeReady() {
+  if (whisperBlocked) return false;
+  /** @type {unknown} */
+  let status = null;
+  try {
+    status = await ipcRenderer.invoke('get-whisper-status');
+  } catch {
+    return true;
+  }
+  if (status == null || typeof status !== 'object') return true;
+  const ok = /** @type {{ ok?: unknown }} */ (status).ok;
+  if (ok === true) return true;
+  if (ok === false) {
+    blockTranscription();
+    return false;
+  }
+  return true;
+}
+
+function blockTranscription() {
+  if (whisperBlocked) return;
+  whisperBlocked = true;
+  stopTranscription({ silent: true });
+  appendTranscript('Transcription unavailable in this build', 'local', true);
+}
+
 async function processChunk() {
+  if (!(await transcriptionRuntimeReady())) return;
   const blob = new Blob(audioChunks, { type: 'audio/webm' });
   const buf  = Buffer.from(await blob.arrayBuffer());
   const tmp  = path.join(os.tmpdir(), `stealth-${Date.now()}.webm`);
@@ -473,10 +796,10 @@ async function processChunk() {
   } catch (err) {
     const e = /** @type {Error & { code?: string }} */ (err);
     if (e.code === 'MODULE_NOT_FOUND') {
-      appendTranscript('nodejs-whisper not installed — run: npm install && npm run rebuild', 'local');
-      stopTranscription();
+      appendTranscript('Transcription engine is not installed. Run npm install, then npm run rebuild.', 'local', true);
+      stopTranscription({ silent: true });
     } else {
-      appendTranscript(`Transcription error: ${e.message}`, 'local');
+      appendTranscript(`Transcription error: ${e.message}`, 'local', true);
     }
   } finally {
     fs.unlink(tmp, () => {});
@@ -484,17 +807,22 @@ async function processChunk() {
 }
 
 // ── Audio device management ────────────────────────────────────────────────────
-async function populateAudioDevices() {
+/** @param {boolean} [requestPermission] */
+async function populateAudioDevices(requestPermission = false) {
   const select = /** @type {HTMLSelectElement | null} */ (document.getElementById('audio-device-select'));
   if (!select) return;
   try {
-    // Request permission so labels populate
-    await navigator.mediaDevices.getUserMedia({ audio: true })
-      .then((s) => s.getTracks().forEach((t) => t.stop()))
-      .catch(() => {});
+    // Permission is deferred until the user starts recording so a screen share
+    // does not get an OS prompt the moment the window appears.
+    if (requestPermission) {
+      await navigator.mediaDevices.getUserMedia({ audio: true })
+        .then((s) => s.getTracks().forEach((t) => t.stop()))
+        .catch(() => {});
+    }
     const devices = await navigator.mediaDevices.enumerateDevices();
     const inputs = devices.filter((d) => d.kind === 'audioinput');
-    select.innerHTML = '';
+    const previous = select.value;
+    select.replaceChildren();
     let preferredId = '';
     // Offer system audio (desktopCapturer) on both macOS and Windows
     if (process.platform === 'win32' || process.platform === 'darwin') {
@@ -513,16 +841,34 @@ async function populateAudioDevices() {
       if (isSystem) { blackholeFound = true; if (!preferredId) preferredId = device.deviceId; }
       select.appendChild(opt);
     }
-    if (preferredId) select.value = preferredId;
+    if (previous && Array.from(select.options).some((opt) => opt.value === previous)) {
+      select.value = previous;
+    } else if (preferredId) {
+      select.value = preferredId;
+    }
+    if (!select.options.length) {
+      const empty = document.createElement('option');
+      empty.value = '';
+      empty.textContent = 'No audio inputs found';
+      select.appendChild(empty);
+    }
+    const labelsAvailable = inputs.some((d) => d.label);
     // Show BlackHole hint on macOS if not found
     const hint = document.getElementById('blackhole-hint');
-    if (hint) hint.style.display = (process.platform === 'darwin' && !blackholeFound) ? 'block' : 'none';
+    if (hint) hint.style.display = (process.platform === 'darwin' && labelsAvailable && !blackholeFound) ? 'block' : 'none';
     const statusEl = document.getElementById('audio-device-status');
     if (statusEl) {
       const isSystem = select.value === '__desktop__' || (select.options[select.selectedIndex]?.text || '').startsWith('🔊');
       statusEl.style.display = isSystem ? 'inline' : 'none';
     }
-  } catch (e) { /* silent */ }
+  } catch (e) {
+    select.replaceChildren();
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'Audio devices unavailable';
+    select.appendChild(opt);
+    showNotification('Audio devices could not be listed', 'warn');
+  }
 }
 
 async function getDesktopAudioStream() {
@@ -579,32 +925,49 @@ if (audioDeviceSelect) {
 
 window.addEventListener('DOMContentLoaded', () => { populateAudioDevices(); });
 
+/** @param {boolean} active */
+function setRecordingUi(active) {
+  const dot = document.getElementById('bar-rec-dot');
+  if (dot instanceof HTMLElement) dot.style.display = active ? 'inline-block' : 'none';
+  const barLabel = document.getElementById('bar-rec-label');
+  const panelLabel = document.getElementById('panel-rec-label');
+  if (barLabel instanceof HTMLElement) barLabel.hidden = !active;
+  if (panelLabel instanceof HTMLElement) panelLabel.hidden = !active;
+  if (transcriptBtn) {
+    transcriptBtn.textContent = active ? '⏹ Stop' : '🎙 Record';
+    transcriptBtn.style.color = active ? '#fecaca' : '#c4b5fd';
+    transcriptBtn.style.borderColor = active ? '#f87171' : '#a78bfa';
+    transcriptBtn.setAttribute('aria-pressed', active ? 'true' : 'false');
+    transcriptBtn.setAttribute('aria-label', active ? 'Stop recording' : 'Start recording');
+  }
+}
+
 async function startTranscription() {
   try {
     const stream = await getAudioStream();
     isTranscribing = true;
-    if (transcriptBtn) {
-      transcriptBtn.textContent = '⏹ Stop';
-      transcriptBtn.style.color = '#ef4444';
-      transcriptBtn.style.borderColor = '#ef4444';
-    }
-    const recDot = document.getElementById('bar-rec-dot');
-    if (recDot) recDot.style.display = 'inline-block';
+    setRecordingUi(true);
+    announce('Recording started');
     recordChunk(stream);
+    populateAudioDevices(false);
   } catch (err) {
+    isTranscribing = false;
+    setRecordingUi(false);
     const e = /** @type {Error} */ (err);
-    appendTranscript(`Mic error: ${e.message}`, 'local');
+    appendTranscript(`Mic error: ${e.message}`, 'local', true);
   }
 }
 
-function stopTranscription() {
+/** @param {{ silent?: boolean }} [options] */
+function stopTranscription(options = {}) {
   isTranscribing = false;
-  if (mediaRecorder && mediaRecorder.state === 'recording') mediaRecorder.stop();
-  if (transcriptBtn) {
-    transcriptBtn.textContent = '🎙 Record';
-    transcriptBtn.style.color = '#a78bfa';
-    transcriptBtn.style.borderColor = '#a78bfa';
+  const recorder = mediaRecorder;
+  if (recorder && recorder.state === 'recording') recorder.stop();
+  if (recorder && recorder.stream) {
+    recorder.stream.getTracks().forEach((track) => track.stop());
   }
+  setRecordingUi(false);
+  if (!options.silent) announce('Recording stopped');
 }
 
 if (transcriptBtn) {
@@ -619,33 +982,52 @@ if (transcriptBtn) {
  * @param {string} text
  * @param {'local' | 'remote'} source
  */
-function appendTranscript(text, source) {
+/**
+ * @param {string} text
+ * @param {'local' | 'remote'} source
+ * @param {boolean} [isError]
+ */
+function appendTranscript(text, source, isError = false) {
   if (!transcriptFeed) return;
+  dropEmptyHint('transcript-empty');
   const entry = document.createElement('div');
-  entry.className = `transcript-entry ${source}`;
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  entry.innerHTML = `<span class="ts-time">${time}</span><span class="ts-text">${text}</span>`;
+  entry.className = `transcript-entry ${source}${isError ? ' error' : ''}`;
+  const timeEl = document.createElement('span');
+  timeEl.className = 'ts-time';
+  timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const textEl = document.createElement('span');
+  textEl.className = 'ts-text';
+  textEl.textContent = text;
+  entry.append(timeEl, textEl);
   transcriptFeed.appendChild(entry);
   transcriptFeed.scrollTop = transcriptFeed.scrollHeight;
+  if (isError) announce(text);
 }
 
 // ── Notifications ─────────────────────────────────────────────────────────────
-/** @param {string} message */
-function showNotification(message) {
+/**
+ * @param {string} message
+ * @param {'ok' | 'warn' | 'danger'} [tone]
+ */
+function showNotification(message, tone = 'ok') {
   const el = document.createElement('div');
   el.textContent = message;
+  el.setAttribute('aria-hidden', 'true');
+  const background = tone === 'danger' ? '#b91c1c' : tone === 'warn' ? '#fbbf24' : '#4ade80';
+  const color = tone === 'danger' ? '#fff' : '#111';
   el.style.cssText = `
-    position:fixed; top:50px; right:20px;
-    background:rgba(74,222,128,0.9); color:#000;
-    padding:10px 20px; border-radius:6px;
-    font-size:12px; font-weight:500; z-index:1000;
+    position:fixed; top:6px; right:8px; left:8px;
+    background:${background}; color:${color};
+    padding:10px 14px; border-radius:6px;
+    font-size:12px; font-weight:600; z-index:1000;
     animation:slideIn 0.3s ease;
   `;
   document.body.appendChild(el);
+  announce(message);
   setTimeout(() => {
     el.style.animation = 'slideOut 0.3s ease';
     setTimeout(() => el.remove(), 300);
-  }, 2000);
+  }, 2400);
 }
 
 // ── Init state ────────────────────────────────────────────────────────────────
@@ -654,6 +1036,7 @@ updateCompanionStatus(null); // capture/transcript disabled until room joined; A
 // ── AI Analysis ───────────────────────────────────────────────────────────────
 
 let autoAnswerEnabled = true;
+let aiAutoScroll = true;
 
 /** @param {string} text @returns {boolean} */
 function looksLikeQuestion(text) {
@@ -678,16 +1061,23 @@ async function streamOpenRouter(messages) {
   });
 
   const feed = document.getElementById('ai-feed');
+  dropEmptyHint('ai-empty');
 
-  // Create the bubble element immediately
   const entry = document.createElement('div');
   entry.className = 'ai-entry';
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  entry.innerHTML = `<span class="ts-time">${time}</span><span class="ai-text"><span class="ai-thinking">···</span></span>`;
+  const timeEl = document.createElement('span');
+  timeEl.className = 'ts-time';
+  timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const textSpan = document.createElement('span');
+  textSpan.className = 'ai-text';
+  const thinking = document.createElement('span');
+  thinking.className = 'ai-thinking';
+  thinking.textContent = '···';
+  textSpan.appendChild(thinking);
+  entry.append(timeEl, textSpan);
   if (feed) feed.appendChild(entry);
   if (aiAutoScroll && feed) feed.scrollTop = feed.scrollHeight;
 
-  const textSpan = entry.querySelector('.ai-text');
   let accumulated = '';
 
   const tryStream = async (/** @type {string} */ model) => {
@@ -711,17 +1101,38 @@ async function streamOpenRouter(messages) {
     await tryStream('anthropic/claude-opus-4');
   } catch (_primaryErr) {
     accumulated = '';
+    if (textSpan) textSpan.textContent = '';
     await tryStream('openai/gpt-4o');
   }
 
+  const preview = accumulated.replace(/[#*`]/g, ' ').replace(/\s+/g, ' ').trim();
+  if (preview) {
+    updateBarPreview(preview);
+    announce('AI response ready');
+  }
   return accumulated;
 }
 
 /** @param {boolean} loading */
 function setAiLoading(loading) {
   aiLoading = loading;
-  const btns = [analyzeScreenBtn, analyzeAudioBtn, analyzeBothBtn];
-  btns.forEach((b) => { if (b) b.disabled = loading; });
+  const btns = [
+    analyzeScreenBtn,
+    analyzeAudioBtn,
+    analyzeBothBtn,
+    document.getElementById('answer-question-btn'),
+    document.getElementById('chat-send-btn'),
+  ];
+  btns.forEach((b) => { if (b instanceof HTMLButtonElement) b.disabled = loading; });
+  const feed = document.getElementById('ai-feed');
+  if (feed) feed.setAttribute('aria-busy', loading ? 'true' : 'false');
+}
+
+function ensureApiKey() {
+  if (openRouterApiKey) return true;
+  appendAiEntry('Add an OpenRouter API key in Settings before asking the AI.', true);
+  openSettings();
+  return false;
 }
 
 /**
@@ -731,13 +1142,37 @@ function setAiLoading(loading) {
 function appendAiEntry(text, isError = false) {
   const feed = document.getElementById('ai-feed');
   if (!feed) return;
+  dropEmptyHint('ai-empty');
   const entry = document.createElement('div');
   entry.className = `ai-entry${isError ? ' error' : ''}`;
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const rendered = isError
-    ? text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    : renderMarkdown(text);
-  entry.innerHTML = `<span class="ts-time">${time}</span><span class="ai-text">${rendered}</span>`;
+  const timeEl = document.createElement('span');
+  timeEl.className = 'ts-time';
+  timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const textEl = document.createElement('span');
+  textEl.className = 'ai-text';
+  if (isError) textEl.textContent = text;
+  else textEl.innerHTML = renderMarkdown(text);
+  entry.append(timeEl, textEl);
+  feed.appendChild(entry);
+  if (aiAutoScroll) feed.scrollTop = feed.scrollHeight;
+  if (isError) announce(text);
+  else updateBarPreview(text.replace(/[#*`]/g, ' '));
+}
+
+/** @param {string} text */
+function appendUserEntry(text) {
+  const feed = document.getElementById('ai-feed');
+  if (!feed) return;
+  dropEmptyHint('ai-empty');
+  const entry = document.createElement('div');
+  entry.className = 'ai-entry user';
+  const timeEl = document.createElement('span');
+  timeEl.className = 'ts-time';
+  timeEl.textContent = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const textEl = document.createElement('span');
+  textEl.className = 'ai-text';
+  textEl.textContent = text;
+  entry.append(timeEl, textEl);
   feed.appendChild(entry);
   if (aiAutoScroll) feed.scrollTop = feed.scrollHeight;
 }
@@ -751,8 +1186,9 @@ function getTranscriptContext() {
 
 async function analyzeScreen() {
   if (aiLoading) return;
+  if (!ensureApiKey()) return;
   if (!lastScreenshotDataUrl) {
-    appendAiEntry('No screenshot captured yet. Press Ctrl+Shift+I first.', true);
+    appendAiEntry('No screenshot yet. Capture the screen first.', true);
     return;
   }
   setAiLoading(true);
@@ -792,6 +1228,7 @@ Format your response as:
 
 async function analyzeAudio() {
   if (aiLoading) return;
+  if (!ensureApiKey()) return;
   const transcript = getTranscriptContext();
   if (!transcript) {
     appendAiEntry('No transcript yet. Start transcribing first.', true);
@@ -835,6 +1272,7 @@ Format your response as:
 
 async function analyzeBoth() {
   if (aiLoading) return;
+  if (!ensureApiKey()) return;
   const transcript = getTranscriptContext();
   const hasScreen = !!lastScreenshotDataUrl;
   const hasAudio = !!transcript;
@@ -900,32 +1338,33 @@ if (analyzeBothBtn)   analyzeBothBtn.addEventListener('click',   () => analyzeBo
 function doClearAiFeed() {
   const feed = document.getElementById('ai-feed');
   if (feed) {
-    feed.innerHTML = '<div style="margin:auto;text-align:center;color:rgba(255,255,255,0.15);font-size:10px;padding:20px 0;">AI context cleared — ready for a fresh start</div>';
+    feed.replaceChildren();
+    const hint = document.createElement('p');
+    hint.id = 'ai-empty';
+    hint.className = 'empty-hint';
+    hint.textContent = 'AI context cleared. Ready for a fresh start.';
+    feed.appendChild(hint);
   }
   lastScreenshotDataUrl = null;
   const img = /** @type {HTMLImageElement | null} */ (document.getElementById('screenshot-img'));
   if (img) { img.src = ''; img.style.display = 'none'; }
   const ph = document.getElementById('screenshot-placeholder');
   if (ph) ph.style.display = 'block';
+  const modal = document.getElementById('screenshot-modal');
+  if (modal instanceof HTMLElement && modal.style.display === 'flex') closeModal(modal);
+  announce('AI feed cleared');
 }
 
 ipcRenderer.on('clear-ai-feed', () => doClearAiFeed());
 
 ipcRenderer.on('toggle-auto-answer', () => {
-  const btn = document.getElementById('auto-answer-btn');
-  if (!btn) return;
   autoAnswerEnabled = !autoAnswerEnabled;
-  btn.style.color = autoAnswerEnabled ? 'rgba(74,222,128,0.85)' : 'rgba(255,255,255,0.25)';
-  btn.style.borderColor = autoAnswerEnabled ? 'rgba(74,222,128,0.25)' : 'rgba(255,255,255,0.1)';
-  btn.style.background = autoAnswerEnabled ? 'rgba(74,222,128,0.1)' : 'transparent';
+  renderAutoAnswer();
 });
 
 ipcRenderer.on('toggle-auto-scroll', () => {
-  const btn = document.getElementById('ai-autoscroll-btn');
-  if (!btn) return;
   aiAutoScroll = !aiAutoScroll;
-  btn.style.color = aiAutoScroll ? 'rgba(251,191,36,0.85)' : 'rgba(255,255,255,0.25)';
-  btn.textContent = aiAutoScroll ? '↓ Auto' : '↓ Off';
+  renderAutoScroll();
 });
 
 if (clearAiBtn) {
@@ -967,13 +1406,13 @@ const sessionBadge = document.getElementById('session-badge');
 
 if (sessionBtn) {
   sessionBtn.addEventListener('click', () => {
-    if (sessionModal) sessionModal.style.display = 'flex';
+    if (sessionModal instanceof HTMLElement) openModal(sessionModal, '#session-company');
   });
 }
 
 if (sessionCancelBtn) {
   sessionCancelBtn.addEventListener('click', () => {
-    if (sessionModal) sessionModal.style.display = 'none';
+    if (sessionModal instanceof HTMLElement) closeModal(sessionModal);
   });
 }
 
@@ -987,7 +1426,7 @@ if (sessionStartBtn) {
       role:     role     ? role.value.trim()     : '',
       language: language ? language.value        : 'en',
     };
-    if (sessionModal) sessionModal.style.display = 'none';
+    if (sessionModal instanceof HTMLElement) closeModal(sessionModal);
     if (sessionBadge) {
       sessionBadge.textContent = sessionContext.company || sessionContext.role
         ? `${sessionContext.role}${sessionContext.company ? ' @ ' + sessionContext.company : ''}`
@@ -1004,47 +1443,74 @@ let timerSeconds = 0;
 /** @type {ReturnType<typeof setInterval> | null} */
 let timerInterval = null;
 
+/** @param {number} seconds @param {string} label */
+function paintTimer(seconds, label) {
+  const m = String(Math.floor(seconds / 60)).padStart(2, '0');
+  const s = String(seconds % 60).padStart(2, '0');
+  ['session-timer', 'bar-timer'].forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = `${m}:${s}`;
+    el.setAttribute('aria-label', label);
+  });
+}
+
 function startTimer() {
   if (timerInterval) return;
   timerSeconds = 0;
+  paintTimer(0, 'Session time 00:00');
   timerInterval = setInterval(() => {
     timerSeconds++;
     const m = String(Math.floor(timerSeconds / 60)).padStart(2, '0');
     const s = String(timerSeconds % 60).padStart(2, '0');
-    const el = document.getElementById('session-timer');
-    if (el) el.textContent = `⏱ ${m}:${s}`;
+    paintTimer(timerSeconds, `Session time ${m}:${s}`);
   }, 1000);
 }
 
 function stopTimer() {
   if (timerInterval) { clearInterval(timerInterval); timerInterval = null; }
-  const el = document.getElementById('session-timer');
-  if (el) el.textContent = '⏱ 00:00';
+  paintTimer(0, 'Session timer stopped');
 }
 
 // ── AI Auto-answer toggle ──────────────────────────────────────────────────────
+function renderAutoAnswer() {
+  const btn = document.getElementById('auto-answer-btn');
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.setAttribute('aria-pressed', autoAnswerEnabled ? 'true' : 'false');
+  btn.textContent = autoAnswerEnabled ? '⚡ Auto' : '⚡ Off';
+  btn.style.color = autoAnswerEnabled ? 'rgba(74,222,128,0.95)' : 'rgba(255,255,255,0.78)';
+  btn.style.borderColor = autoAnswerEnabled ? 'rgba(74,222,128,0.45)' : 'rgba(255,255,255,0.28)';
+  btn.style.background = autoAnswerEnabled ? 'rgba(74,222,128,0.12)' : 'transparent';
+}
+
 const autoAnswerBtn = document.getElementById('auto-answer-btn');
 if (autoAnswerBtn) {
   autoAnswerBtn.addEventListener('click', () => {
     autoAnswerEnabled = !autoAnswerEnabled;
-    autoAnswerBtn.style.color = autoAnswerEnabled ? 'rgba(74,222,128,0.85)' : 'rgba(255,255,255,0.25)';
-    autoAnswerBtn.style.borderColor = autoAnswerEnabled ? 'rgba(74,222,128,0.25)' : 'rgba(255,255,255,0.1)';
-    autoAnswerBtn.style.background = autoAnswerEnabled ? 'rgba(74,222,128,0.1)' : 'transparent';
+    renderAutoAnswer();
+    announce(autoAnswerEnabled ? 'Auto-answer on' : 'Auto-answer off');
   });
 }
+renderAutoAnswer();
 
 // ── AI Auto-scroll ─────────────────────────────────────────────────────────────
-let aiAutoScroll = true;
+function renderAutoScroll() {
+  const btn = document.getElementById('ai-autoscroll-btn');
+  if (!(btn instanceof HTMLButtonElement)) return;
+  btn.setAttribute('aria-pressed', aiAutoScroll ? 'true' : 'false');
+  btn.textContent = aiAutoScroll ? '↓ Auto' : '↓ Off';
+  btn.style.color = aiAutoScroll ? 'rgba(251,191,36,0.95)' : 'rgba(255,255,255,0.78)';
+}
 
 const aiAutoscrollBtn = document.getElementById('ai-autoscroll-btn');
 if (aiAutoscrollBtn) {
-  aiAutoscrollBtn.style.color = 'rgba(251,191,36,0.85)';
   aiAutoscrollBtn.addEventListener('click', () => {
     aiAutoScroll = !aiAutoScroll;
-    aiAutoscrollBtn.style.color = aiAutoScroll ? 'rgba(251,191,36,0.85)' : 'rgba(255,255,255,0.25)';
-    aiAutoscrollBtn.textContent = aiAutoScroll ? '↓ Auto' : '↓ Off';
+    renderAutoScroll();
+    announce(aiAutoScroll ? 'Auto-scroll on' : 'Auto-scroll off');
   });
 }
+renderAutoScroll();
 
 // ── Markdown renderer (XSS-safe) ──────────────────────────────────────────────
 /** @param {string} text @returns {string} */
@@ -1066,6 +1532,7 @@ function renderMarkdown(text) {
 // ── Answer Question ────────────────────────────────────────────────────────────
 async function answerQuestion() {
   if (aiLoading) return;
+  if (!ensureApiKey()) return;
   const transcript = getTranscriptContext();
   if (!transcript) {
     appendAiEntry('No transcript yet. Start transcribing first.', true);
@@ -1114,7 +1581,9 @@ async function sendChatMessage() {
   const input = /** @type {HTMLInputElement | null} */ (document.getElementById('chat-input'));
   const text = input ? input.value.trim() : '';
   if (!text || aiLoading) return;
-  if (input) { input.value = ''; input.blur(); }
+  if (!ensureApiKey()) return;
+  appendUserEntry(text);
+  if (input) input.value = '';
   setAiLoading(true);
   try {
     const systemPrompt = buildSystemPrompt();
@@ -1124,9 +1593,11 @@ async function sendChatMessage() {
     ]);
   } catch (err) {
     const e = /** @type {Error} */ (err);
+    if (input && !input.value) input.value = text;
     appendAiEntry(`Error: ${e.message}`, true);
   } finally {
     setAiLoading(false);
+    if (input) input.focus();
   }
 }
 
@@ -1138,14 +1609,79 @@ if (chatInput)   chatInput.addEventListener('keydown', (e) => {
 });
 
 // ── Settings modal ────────────────────────────────────────────────────────────
+/**
+ * Normalize save-api-key / clear-api-key results.
+ * PR #3 returns { ok:true } or { ok:false, error }.
+ * The previous main process returns { ok:true, encrypted } or, if a handler
+ * returns nothing, undefined. A thrown invoke is handled by the caller.
+ * @param {unknown} result
+ * @returns {{ ok: true, legacy?: boolean, encrypted?: unknown } | { ok: false, error: string }}
+ */
+function readIpcAck(result) {
+  if (result == null) return { ok: true, legacy: true };
+  if (typeof result !== 'object') return { ok: false, error: '' };
+  const rec = /** @type {{ ok?: unknown, error?: unknown, encrypted?: unknown }} */ (result);
+  if (rec.ok === true) return { ok: true, encrypted: rec.encrypted };
+  if (rec.ok === false) return { ok: false, error: typeof rec.error === 'string' ? rec.error : '' };
+  return { ok: false, error: '' };
+}
+
+/** @type {Record<string, string>} */
+const SAVE_KEY_ERRORS = {
+  unauthorized: 'The key was not saved. This window is not allowed to store it.',
+  'invalid-key': 'The key was not saved. Enter a key and try again.',
+  'encryption-unavailable': 'The key was not saved. OS encryption is unavailable, so the key would not be protected.',
+  'write-failed': 'The key was not saved. It could not be written to disk.',
+};
+
+/** @type {Record<string, string>} */
+const CLEAR_KEY_ERRORS = {
+  unauthorized: 'The key was not cleared. This window is not allowed to remove it.',
+  'unlink-failed': 'The key was not cleared. The saved file could not be removed.',
+};
+
+/**
+ * @param {string} code
+ * @param {Record<string, string>} table
+ * @param {string} fallback
+ */
+function apiKeyErrorMessage(code, table, fallback) {
+  return (code && table[code]) || fallback;
+}
+
+/**
+ * @param {string} [message]
+ * @param {boolean} [isError]
+ */
+function refreshApiKeyStatus(message, isError = false) {
+  const status = document.getElementById('api-key-status');
+  if (!status) return;
+  status.textContent = message || (openRouterApiKey ? 'A key is saved on this device.' : 'No key saved yet.');
+  status.classList.toggle('is-error', Boolean(isError) && Boolean(message));
+}
+
+/** @param {HTMLInputElement | null} input @param {string} message */
+function showApiKeyError(input, message) {
+  refreshApiKeyStatus(message, true);
+  if (input) {
+    input.setAttribute('aria-invalid', 'true');
+    input.setAttribute('aria-errormessage', 'api-key-status');
+    input.focus();
+  }
+  showNotification(message, 'danger');
+}
+
 function openSettings() {
   const modal = document.getElementById('settings-modal');
-  if (modal) modal.style.display = 'flex';
+  const input = document.getElementById('api-key-input');
+  if (input) input.removeAttribute('aria-invalid');
+  refreshApiKeyStatus();
+  if (modal instanceof HTMLElement) openModal(modal, '#api-key-input');
 }
 
 function closeSettings() {
   const modal = document.getElementById('settings-modal');
-  if (modal) modal.style.display = 'none';
+  if (modal instanceof HTMLElement) closeModal(modal);
 }
 
 const settingsBtn = document.getElementById('settings-btn');
@@ -1157,25 +1693,63 @@ if (settingsCancelBtn) settingsCancelBtn.addEventListener('click', closeSettings
 const settingsSaveBtn = document.getElementById('settings-save-btn');
 if (settingsSaveBtn) {
   settingsSaveBtn.addEventListener('click', async () => {
-    const input = /** @type {HTMLInputElement} */ (document.getElementById('api-key-input'));
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('api-key-input'));
     const key = input ? input.value.trim() : '';
-    if (!key) return;
-    await ipcRenderer.invoke('save-api-key', key);
-    openRouterApiKey = key;
-    closeSettings();
-    showNotification('API key saved');
+    if (!key) {
+      showApiKeyError(input, 'Enter a key before saving.');
+      return;
+    }
+    settingsSaveBtn.disabled = true;
+    try {
+      const ack = readIpcAck(await ipcRenderer.invoke('save-api-key', key));
+      if (!ack.ok) {
+        showApiKeyError(input, apiKeyErrorMessage(ack.error, SAVE_KEY_ERRORS, 'The key was not saved.'));
+        return;
+      }
+      openRouterApiKey = key;
+      if (input) {
+        input.value = '';
+        input.removeAttribute('aria-invalid');
+      }
+      const savedWithoutEncryption = ack.encrypted === false;
+      const message = savedWithoutEncryption
+        ? 'API key saved without OS encryption.'
+        : 'API key saved.';
+      refreshApiKeyStatus(message);
+      closeSettings();
+      showNotification(message, savedWithoutEncryption ? 'warn' : 'ok');
+    } catch {
+      showApiKeyError(input, 'The key was not saved. The app could not finish storing it.');
+    } finally {
+      settingsSaveBtn.disabled = false;
+    }
   });
 }
 
 const settingsClearBtn = document.getElementById('settings-clear-btn');
 if (settingsClearBtn) {
   settingsClearBtn.addEventListener('click', async () => {
-    await ipcRenderer.invoke('clear-api-key');
-    openRouterApiKey = '';
-    const input = /** @type {HTMLInputElement} */ (document.getElementById('api-key-input'));
-    if (input) input.value = '';
-    closeSettings();
-    showNotification('API key cleared');
+    const input = /** @type {HTMLInputElement | null} */ (document.getElementById('api-key-input'));
+    settingsClearBtn.disabled = true;
+    try {
+      const ack = readIpcAck(await ipcRenderer.invoke('clear-api-key'));
+      if (!ack.ok) {
+        showApiKeyError(input, apiKeyErrorMessage(ack.error, CLEAR_KEY_ERRORS, 'The key was not cleared.'));
+        return;
+      }
+      openRouterApiKey = '';
+      if (input) {
+        input.value = '';
+        input.removeAttribute('aria-invalid');
+      }
+      refreshApiKeyStatus('API key cleared.');
+      closeSettings();
+      showNotification('API key cleared.');
+    } catch {
+      showApiKeyError(input, 'The key was not cleared. The app could not finish removing it.');
+    } finally {
+      settingsClearBtn.disabled = false;
+    }
   });
 }
 
