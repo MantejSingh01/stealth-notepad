@@ -79,6 +79,9 @@
       "!node_modules/.cache"
     ],
     "asar": true,
+    "asarUnpack": [
+      "**/node_modules/nodejs-whisper/**/*"
+    ],
     "compression": "maximum",
     "mac": {
       "target": [
