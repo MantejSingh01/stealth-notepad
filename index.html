@@ -297,26 +297,138 @@
     /* Keep chat input background stable on focus */
     #chat-input:focus {
       background: #1a1a2e !important;
-      outline: none;
       border-color: rgba(124,107,224,0.5) !important;
     }
 
-    textarea::placeholder { color: rgba(255,255,255,0.3); }
+    textarea::placeholder { color: rgba(255,255,255,0.55); }
     textarea::-webkit-scrollbar { width: 8px; }
     textarea::-webkit-scrollbar-track { background: transparent; }
     textarea::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 4px; }
     textarea::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
+    /* Accessibility, empty states, and stealth-mode signalling.
+       Kept as a layer so the glass theme above stays intact. */
+    [hidden] { display: none !important; }
+
+    h1.panel-header-title,
+    h2.panel-header-title {
+      margin: 0;
+      font-size: 12px;
+      font-weight: 600;
+      color: rgba(255,255,255,0.9);
+    }
+
+    button:focus-visible,
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    [tabindex]:focus-visible {
+      outline: 2px solid #fbbf24 !important;
+      outline-offset: 2px;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .empty-hint {
+      margin: auto;
+      text-align: center;
+      color: rgba(255,255,255,0.72);
+      font-size: 12px;
+      line-height: 1.5;
+      padding: 16px 8px;
+    }
+
+    .panel-header-btn { color: rgba(255,255,255,0.82); font-size: 12px; }
+    .section-header { color: rgba(255,255,255,0.72); font-size: 11px; }
+    #session-timer, #bar-timer { color: rgba(255,255,255,0.78); font-size: 11px; }
+    #bar-preview { font-size: 12px; color: rgba(253,224,71,0.95); }
+    #audio-device-row label { color: rgba(255,255,255,0.75); font-size: 11px; }
+    .ts-time, .ai-entry .ts-time { color: rgba(255,255,255,0.58); }
+    .session-field label { color: rgba(255,255,255,0.78); font-size: 11px; }
+    input::placeholder { color: rgba(255,255,255,0.55); }
+    #screenshot-placeholder, #room-screenshot-ph { color: rgba(255,255,255,0.58); font-size: 12px; }
+    #whisper-lang, #audio-device-select { color: rgba(255,255,255,0.88); font-size: 11px; }
+    .ai-btn { font-size: 11px; }
+
+    #opacity-display {
+      font-size: 11px;
+      color: rgba(255,255,255,0.88);
+      font-variant-numeric: tabular-nums;
+    }
+    #opacity-display.opacity-low { color: #fbbf24; font-weight: 700; }
+
+    body.stealth-off #bar-mode,
+    body.stealth-off #panel-mode {
+      border-color: rgba(248,113,113,0.95);
+      box-shadow: inset 0 0 0 1px rgba(248,113,113,0.45);
+    }
+    body.stealth-unsupported #bar-mode,
+    body.stealth-unsupported #panel-mode {
+      border-color: rgba(251,191,36,0.9);
+    }
+
+    .stealth-badge {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #fff;
+      background: #dc2626;
+      border-radius: 3px;
+      padding: 2px 6px;
+      flex-shrink: 0;
+    }
+    body.stealth-unsupported .stealth-badge {
+      color: #1c1400;
+      background: #fbbf24;
+    }
+
+    .rec-status {
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      color: #fff;
+      background: #dc2626;
+      border-radius: 3px;
+      padding: 2px 5px;
+      flex-shrink: 0;
+    }
+
+    .save-status { font-size: 11px; color: rgba(255,255,255,0.72); }
+    .ai-entry.user .ai-text { color: rgba(255,255,255,0.92); }
+    .transcript-entry.error .ts-text { color: #fecaca; }
   </style>
 </head>
 <body>
 
   <!-- ===== BAR MODE ===== -->
   <div id="bar-mode">
-    <span class="bar-icon" style="-webkit-app-region:no-drag;cursor:pointer;" id="bar-click-area">🔒</span>
-    <span id="bar-timer" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand>00:00</span>
-    <span id="bar-rec-dot"></span>
-    <span id="bar-preview" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand>Ready — press ⌘⇧N to show</span>
-    <button id="bar-expand-btn" data-tip="Expand AI panel<br><kbd>Ctrl+Shift+P</kbd>">▲ Open</button>
+    <span class="bar-icon" style="-webkit-app-region:no-drag;cursor:pointer;" id="bar-click-area" role="img" aria-label="Stealth on">🔒</span>
+    <span id="bar-stealth-badge" class="stealth-badge" hidden>On screen</span>
+    <span id="bar-timer" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand title="Session timer" aria-label="Session timer not started">00:00</span>
+    <span id="bar-rec-dot" aria-hidden="true"></span>
+    <span id="bar-rec-label" class="rec-status" hidden>REC</span>
+    <span id="bar-preview" style="-webkit-app-region:no-drag;cursor:pointer;" data-bar-expand>Stealth notepad</span>
+    <button id="bar-expand-btn" type="button" data-tip="Expand AI panel<br><kbd>Ctrl+Shift+P</kbd>" aria-keyshortcuts="Control+Shift+P" aria-label="Open panel">▲ Open</button>
   </div>
 
   <!-- ===== PANEL MODE ===== -->
@@ -327,40 +439,43 @@
 
       <!-- Header -->
       <div class="panel-header">
-        <span class="panel-header-title">🔒 Stealth</span>
+        <h1 class="panel-header-title">🔒 Stealth</h1>
         <span id="session-badge"></span>
-        <span id="session-timer">00:00</span>
+        <span id="session-timer" title="Session timer" aria-label="Session timer not started">00:00</span>
         <span class="header-spacer"></span>
-        <span id="opacity-display" style="font-size:9px;color:rgba(255,255,255,0.25);">100%</span>
-        <button class="panel-header-btn" id="stealth-toggle-btn" data-tip="Toggle stealth mode<br>OFF = visible in screen share<br><kbd>Ctrl+Shift+V</kbd>" style="color:rgba(74,222,128,0.8);border:1px solid rgba(74,222,128,0.2);border-radius:3px;padding:1px 6px;">🔒</button>
-        <button class="panel-header-btn" id="session-btn" data-tip="Set session context<br>Company · Role · Language">🎯</button>
-        <button class="panel-header-btn" id="minimize-btn" data-tip="Hide window<br><kbd>ESC</kbd>">−</button>
-        <button class="panel-header-btn" id="close-btn" data-tip="Quit app">✕</button>
-        <button class="panel-header-btn" id="collapse-to-bar-btn" data-tip="Collapse to thin bar">▼</button>
+        <span id="stealth-badge" class="stealth-badge" hidden>On screen</span>
+        <span id="opacity-display" title="Window opacity. Ctrl+Shift+O cycles 30%, 50%, 70%, and 100%.">100%</span>
+        <button class="panel-header-btn" id="stealth-toggle-btn" type="button" aria-pressed="true" aria-keyshortcuts="Control+Shift+V" aria-label="Stealth on, hidden from screen share" data-tip="Toggle stealth mode<br>Off means this window can appear in a screen share<br><kbd>Ctrl+Shift+V</kbd>" style="color:rgba(74,222,128,0.95);border:1px solid rgba(74,222,128,0.45);border-radius:3px;padding:1px 6px;">🔒</button>
+        <button class="panel-header-btn" id="session-btn" type="button" aria-label="Session context" data-tip="Set session context<br>Company · Role · Language">🎯</button>
+        <button class="panel-header-btn" id="minimize-btn" type="button" aria-label="Hide window" aria-keyshortcuts="Escape" data-tip="Hide window<br><kbd>ESC</kbd>">−</button>
+        <button class="panel-header-btn" id="close-btn" type="button" aria-label="Quit app" data-tip="Quit app">✕</button>
+        <button class="panel-header-btn" id="collapse-to-bar-btn" type="button" aria-label="Collapse to thin bar" data-tip="Collapse to thin bar">▼</button>
       </div>
 
       <!-- AI Answer Feed -->
       <div id="ai-feed-section">
         <div class="section-header" data-interactive>
           <span>AI Answer</span>
-          <button id="auto-answer-btn" data-tip="Auto-detect questions &amp; answer<br><kbd>Ctrl+Shift+B</kbd>" style="font-size:9px;background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.25);border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(74,222,128,0.85);">⚡ Auto</button>
-          <button id="ai-autoscroll-btn" data-tip="Auto-scroll AI feed<br><kbd>Ctrl+Shift+L</kbd>" style="font-size:9px;background:transparent;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(251,191,36,0.85);">↓ Auto</button>
-          <button id="clear-ai-btn" data-tip="Clear AI feed &amp; reset context<br><kbd>Ctrl+Shift+X</kbd>" style="font-size:9px;background:transparent;border:none;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,0.2);">✕</button>
+          <button id="auto-answer-btn" type="button" aria-pressed="true" aria-keyshortcuts="Control+Shift+B" data-tip="Auto-detect questions and answer<br><kbd>Ctrl+Shift+B</kbd>" style="font-size:11px;background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.25);border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(74,222,128,0.95);">⚡ Auto</button>
+          <button id="ai-autoscroll-btn" type="button" aria-pressed="true" aria-keyshortcuts="Control+Shift+L" data-tip="Auto-scroll AI feed<br><kbd>Ctrl+Shift+L</kbd>" style="font-size:11px;background:transparent;border:none;border-radius:3px;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(251,191,36,0.95);">↓ Auto</button>
+          <button id="clear-ai-btn" type="button" aria-label="Clear AI feed" aria-keyshortcuts="Control+Shift+X" data-tip="Clear AI feed and reset context<br><kbd>Ctrl+Shift+X</kbd>" style="font-size:12px;background:transparent;border:none;padding:1px 5px;cursor:pointer;font-family:inherit;color:rgba(255,255,255,0.75);">✕</button>
         </div>
-        <div id="ai-feed"></div>
+        <div id="ai-feed" role="log" aria-label="AI answers" tabindex="0">
+          <p id="ai-empty" class="empty-hint">No answers yet. Ask below, or capture the screen.</p>
+        </div>
         <!-- AI action buttons -->
         <div id="ai-actions">
-          <button id="analyze-screen-btn" class="ai-btn" data-tip="Analyze screenshot with AI<br><kbd>Ctrl+Shift+A</kbd>" style="color:#f59e0b;border-color:#f59e0b;">🔍 Screen</button>
-          <button id="analyze-audio-btn" class="ai-btn" data-tip="Summarize &amp; analyze transcript" style="color:#f59e0b;border-color:#f59e0b;">🧠 Audio</button>
-          <button id="analyze-both-btn" class="ai-btn" data-tip="Analyze screenshot + transcript<br><kbd>Ctrl+Shift+A</kbd>" style="color:#f59e0b;border-color:#f59e0b;">⚡ Both</button>
-          <button id="answer-question-btn" class="ai-btn" data-tip="Extract question from transcript<br>and answer it with AI" style="color:#a78bfa;border-color:#a78bfa;">💬 Answer</button>
+          <button id="analyze-screen-btn" class="ai-btn" type="button" data-tip="Analyze the latest screenshot" style="color:#f59e0b;border-color:#f59e0b;">🔍 Screen</button>
+          <button id="analyze-audio-btn" class="ai-btn" type="button" data-tip="Summarize and analyze the transcript" style="color:#f59e0b;border-color:#f59e0b;">🧠 Audio</button>
+          <button id="analyze-both-btn" class="ai-btn" type="button" aria-keyshortcuts="Control+Shift+A" data-tip="Analyze screenshot and transcript<br><kbd>Ctrl+Shift+A</kbd>" style="color:#f59e0b;border-color:#f59e0b;">⚡ Both</button>
+          <button id="answer-question-btn" class="ai-btn" type="button" data-tip="Extract the latest question from the transcript and answer it" style="color:#a78bfa;border-color:#a78bfa;">💬 Answer</button>
         </div>
         <!-- Direct chat input -->
         <div id="chat-input-row" style="display:flex;gap:6px;padding:6px 10px;border-top:1px solid rgba(255,255,255,0.06);flex-shrink:0;-webkit-app-region:no-drag;">
-          <input id="chat-input" type="text" placeholder="Ask AI anything…"
-            style="flex:1;background:#1a1a2e;border:1px solid rgba(255,255,255,0.18);border-radius:5px;padding:5px 10px;color:#ffffff;font-size:11px;font-family:inherit;outline:none;" />
-          <button id="chat-send-btn" data-tip="Send message<br><kbd>Enter</kbd>"
-            style="padding:5px 12px;font-size:10px;border-radius:5px;cursor:pointer;border:1px solid #7c6be0;background:#2d2456;color:#d4c8ff;font-family:inherit;white-space:nowrap;transition:opacity 0.2s;">Send</button>
+          <input id="chat-input" type="text" placeholder="Ask AI anything…" aria-label="Message to AI"
+            style="flex:1;background:#1a1a2e;border:1px solid rgba(255,255,255,0.18);border-radius:5px;padding:5px 10px;color:#ffffff;font-size:12px;font-family:inherit;" />
+          <button id="chat-send-btn" type="button" data-tip="Send message<br><kbd>Enter</kbd>"
+            style="padding:5px 12px;font-size:12px;border-radius:5px;cursor:pointer;border:1px solid #7c6be0;background:#2d2456;color:#d4c8ff;font-family:inherit;white-space:nowrap;transition:opacity 0.2s;">Send</button>
         </div>
       </div>
 
@@ -368,7 +483,7 @@
       <div id="transcript-section">
         <div class="section-header" data-interactive>
           <span>Transcript</span>
-          <select id="whisper-lang" style="font-size:9px;background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.4);border:none;border-radius:3px;padding:1px 4px;cursor:pointer;outline:none;">
+          <select id="whisper-lang" aria-label="Transcript language" style="font-size:11px;background:rgba(255,255,255,0.07);color:rgba(255,255,255,0.88);border:none;border-radius:3px;padding:1px 4px;cursor:pointer;">
             <option value="en">EN</option>
             <option value="hi">HI</option>
             <option value="es">ES</option>
@@ -381,12 +496,14 @@
             <option value="">Auto</option>
           </select>
         </div>
-        <div id="transcript-feed"></div>
+        <div id="transcript-feed" role="log" aria-label="Transcript" tabindex="0">
+          <p id="transcript-empty" class="empty-hint">No transcript yet. Choose Record to capture audio.</p>
+        </div>
       </div>
 
       <!-- Audio device selector -->
       <div id="audio-device-row">
-        <label>Audio:</label>
+        <label for="audio-device-select">Audio</label>
         <select id="audio-device-select"></select>
         <span id="audio-device-status">● System</span>
       </div>
@@ -394,10 +511,12 @@
 
       <!-- Bottom action bar -->
       <div id="action-bar">
-        <button id="transcript-btn" class="bar-btn" data-tip="Toggle audio recording<br><kbd>Ctrl+Shift+T</kbd>">🎙 Record</button>
-        <button id="capture-btn" class="bar-btn" data-tip="Capture &amp; share screenshot<br><kbd>Ctrl+Shift+I</kbd>">📸 Screen</button>
+        <button id="transcript-btn" class="bar-btn" type="button" aria-pressed="false" aria-keyshortcuts="Control+Shift+T" aria-label="Start recording" data-tip="Toggle audio recording<br><kbd>Ctrl+Shift+T</kbd>">🎙 Record</button>
+        <span id="panel-rec-label" class="rec-status" hidden>Recording</span>
+        <button id="capture-btn" class="bar-btn" type="button" aria-keyshortcuts="Control+Shift+I" data-tip="Capture screenshot<br><kbd>Ctrl+Shift+I</kbd>">📸 Screen</button>
         <div class="spacer"></div>
-        <button id="settings-btn" class="bar-btn" data-tip="Settings<br>API key · Preferences<br><kbd>Ctrl+Shift+,</kbd>">⚙</button>
+        <button id="notepad-tab-btn" class="bar-btn" type="button" aria-label="Open private notepad" data-tip="Private notepad, saved on this device">📝 Notes</button>
+        <button id="settings-btn" class="bar-btn" type="button" aria-label="Settings" aria-keyshortcuts="Control+Shift+," data-tip="Settings<br>API key<br><kbd>Ctrl+Shift+,</kbd>">⚙</button>
       </div>
 
     </div>
@@ -407,13 +526,13 @@
       <div class="panel-header" style="-webkit-app-region:no-drag;">
         <span class="panel-header-title">🤝 Room</span>
         <span id="room-id-display" style="font-size:10px;font-family:monospace;color:rgba(255,255,255,0.5);">—</span>
-        <span id="room-status" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></span>
+        <span id="room-status" role="img" aria-label="Not in a room" style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#ef4444;flex-shrink:0;"></span>
         <span class="header-spacer"></span>
       </div>
       <div style="padding:8px 10px;display:flex;flex-direction:column;gap:6px;flex-shrink:0;-webkit-app-region:no-drag;">
         <div style="display:flex;gap:5px;">
           <button id="create-room-btn" class="room-btn" style="color:#4ade80;border-color:#4ade80;">Create</button>
-          <input id="join-input" class="room-input" type="text" placeholder="Room ID" style="flex:1;" />
+          <input id="join-input" class="room-input" type="text" placeholder="Room ID" aria-label="Room ID" style="flex:1;" />
           <button id="join-room-btn" class="room-btn" style="color:#60a5fa;border-color:#60a5fa;">Join</button>
         </div>
         <div style="display:flex;gap:5px;">
@@ -431,17 +550,19 @@
   </div>
 
   <!-- ===== NOTEPAD OVERLAY ===== -->
-  <div id="notepad-overlay">
+  <div id="notepad-overlay" role="dialog" aria-modal="true" aria-labelledby="notepad-heading" aria-hidden="true">
     <div class="panel-header">
-      <span class="panel-header-title">📝 Notepad</span>
+      <h2 class="panel-header-title" id="notepad-heading">📝 Notepad</h2>
+      <span id="notepad-save-status" class="save-status">Saved on this device</span>
       <span class="header-spacer"></span>
-      <button class="panel-header-btn" id="notepad-close-btn">✕ Close</button>
+      <button class="panel-header-btn" id="notepad-close-btn" type="button">Close</button>
     </div>
-    <textarea id="notepad" placeholder="Private notes — invisible during screen sharing…"></textarea>
+    <textarea id="notepad" aria-label="Private notes" placeholder="Private notes — saved on this device…"></textarea>
   </div>
 
   <!-- ===== SCREENSHOT MODAL ===== -->
-  <div id="screenshot-modal">
+  <div id="screenshot-modal" role="dialog" aria-modal="true" aria-labelledby="screenshot-heading" aria-hidden="true">
+    <h2 id="screenshot-heading" class="sr-only">Screenshot preview</h2>
     <img id="screenshot-img" alt="Screenshot" />
     <div id="screenshot-placeholder">No screenshot yet</div>
     <div id="screenshot-actions">
@@ -451,19 +572,19 @@
   </div>
 
   <!-- ===== SESSION MODAL ===== -->
-  <div id="session-modal">
+  <div id="session-modal" role="dialog" aria-modal="true" aria-labelledby="session-heading" aria-hidden="true">
     <div class="session-modal-box">
-      <div class="session-modal-title">🎯 Session Context</div>
+      <div class="session-modal-title" id="session-heading">🎯 Session Context</div>
       <div class="session-field">
-        <label>Company</label>
+        <label for="session-company">Company</label>
         <input id="session-company" type="text" placeholder="e.g. Google" autocomplete="off" />
       </div>
       <div class="session-field">
-        <label>Role</label>
+        <label for="session-role">Role</label>
         <input id="session-role" type="text" placeholder="e.g. Software Engineer" autocomplete="off" />
       </div>
       <div class="session-field">
-        <label>Language</label>
+        <label for="session-language">Language</label>
         <select id="session-language">
           <option value="en">English</option>
           <option value="hi">Hindi</option>
@@ -488,16 +609,17 @@
   <div id="room-panel" style="display:none;"></div>
 
   <!-- ===== SETTINGS MODAL ===== -->
-  <div id="settings-modal" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.92);backdrop-filter:blur(12px);align-items:center;justify-content:center;-webkit-app-region:no-drag;">
+  <div id="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-heading" aria-hidden="true" style="display:none;position:fixed;inset:0;z-index:400;background:rgba(0,0,0,0.92);backdrop-filter:blur(12px);align-items:center;justify-content:center;-webkit-app-region:no-drag;">
     <div style="background:rgba(18,18,18,0.98);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:24px;width:320px;display:flex;flex-direction:column;gap:14px;">
-      <div style="font-size:13px;color:rgba(255,255,255,0.8);font-weight:600;text-align:center;">&#9881; Settings</div>
+      <div id="settings-heading" style="font-size:13px;color:rgba(255,255,255,0.9);font-weight:600;text-align:center;">&#9881; Settings</div>
       <div style="display:flex;flex-direction:column;gap:4px;">
-        <label style="font-size:10px;color:rgba(255,255,255,0.4);text-transform:uppercase;letter-spacing:0.05em;">OpenRouter API Key</label>
+        <label for="api-key-input" style="font-size:11px;color:rgba(255,255,255,0.78);text-transform:uppercase;letter-spacing:0.05em;">OpenRouter API Key</label>
         <input id="api-key-input" type="password" placeholder="sk-or-v1-..." autocomplete="off"
-          style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:6px 10px;color:#fff;font-size:12px;font-family:inherit;outline:none;" />
+          style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);border-radius:5px;padding:6px 10px;color:#fff;font-size:12px;font-family:inherit;" />
       </div>
       <div style="display:flex;flex-direction:column;gap:4px;">
-        <span style="font-size:9px;color:rgba(255,255,255,0.25);">Key is stored encrypted in your OS keychain. Never leaves your device.</span>
+        <span id="api-key-status" style="font-size:12px;color:rgba(255,255,255,0.85);">No key saved yet.</span>
+        <span style="font-size:11px;color:rgba(255,255,255,0.66);">Key is stored encrypted in your OS keychain. Never leaves your device.</span>
       </div>
       <div style="display:flex;gap:8px;margin-top:4px;">
         <button id="settings-cancel-btn" style="flex:1;padding:7px;font-size:11px;border-radius:5px;cursor:pointer;border:1px solid rgba(255,255,255,0.15);background:transparent;color:rgba(255,255,255,0.5);font-family:inherit;">Cancel</button>
@@ -506,6 +628,8 @@
       </div>
     </div>
   </div>
+
+  <div id="live-status" class="sr-only" role="status" aria-live="polite"></div>
 
   <script src="renderer.js"></script>
 </body>
